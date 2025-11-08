@@ -85,6 +85,10 @@
                         <span class="player-points" id="player1PointsDisplay">0</span>
                         <span class="points-label">Points</span>
                     </div>
+                    <div class="timer-display-item">
+                        <span class="timer-label">⏱️ Time:</span>
+                        <span class="timer-value" id="timer">00:00</span>
+                    </div>
                     <div class="player-score-item">
                         <span class="player-label">Player 2:</span>
                         <span class="player-points" id="player2PointsDisplay">0</span>
@@ -92,13 +96,30 @@
                     </div>
                 </div>
                 <div class="game-content-wrapper">
-                    <div class="grid-container">
-                        <div id="grid" class="grid blurred"></div>
-                        <!-- <div id="timerOverlay" class="timer-overlay">
-                            <div id="gameTimer" class="game-timer">00:00</div>
-                        </div> -->
-                        <div id="startOverlay" class="start-overlay">
-                            <button id="startBtn" class="start-btn">🚀 Start Game</button>
+                    <div class="grid-words-container">
+                        <div class="grid-container">
+                            <div id="grid" class="grid blurred"></div>
+                            <!-- <div id="timerOverlay" class="timer-overlay">
+                                <div id="gameTimer" class="game-timer">00:00</div>
+                            </div> -->
+                            <div id="startOverlay" class="start-overlay">
+                                <button id="startBtn" class="start-btn">
+                                    <span>🚀 START GAME</span>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="words-to-find hidden" id="wordsToFindSection">
+                            <div class="words-header">
+                                <h3>Words to Find</h3>
+                                <div class="words-progress">
+                                    <span id="wordsFoundCount">0</span> / <span id="wordsTotalCount">0</span>
+                                </div>
+                            </div>
+                            <div class="progress-bar-container">
+                                <div id="wordsProgressBar" class="progress-bar"></div>
+                            </div>
+                            <ul id="wordsList" class="words-list"></ul>
                         </div>
                     </div>
                     
@@ -125,11 +146,6 @@
                                 <span id="player2Score">0</span>
                             </div>
                         </div>
-                    </div>
-
-                    <div class="words-to-find">
-                        <h3>Words to Find</h3>
-                        <ul id="wordsList" class="words-list"></ul>
                     </div>
                     
                     <div class="game-stats">
@@ -172,7 +188,10 @@
                         <h4>Player 2 Score: <span id="finalPlayer2Score">0</span></h4>
                     </div>
                 </div>
-                <button id="playAgain" class="play-again-btn">Play Again</button>
+                <div class="modal-buttons">
+                    <button id="closeRoom" class="close-btn">Close</button>
+                    <button id="playAgain" class="play-again-btn">Play Again</button>
+                </div>
             </div>
         </div>
     </div>

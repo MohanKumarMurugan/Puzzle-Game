@@ -4,28 +4,55 @@
  */
 // === WALRUS IMPORTS & SETUP ===
 require('dotenv').config();
-const http = require('http');// ✅ Fix for Node 14 / 16 // For HTTP requests
+const http = require('http'); // For HTTP requests
 const WebSocket = require('ws');
-const fetch = require('node-fetch');
-const WALRUS_PUBLISHER_URL = process.env.PUBLISHER || "https://publisher.walrus-testnet.walrus.space";
-const WALRUS_AGGREGATOR_URL = process.env.AGGREGATOR || "https://aggregator.walrus-testnet.walrus.space";
+const fs = require('fs');
+const path = require('path');
 
-// ✅ Test Walrus connection (non-404 version)
-(async () => {
-  try {
-    const res = await fetch(`${WALRUS_PUBLISHER_URL}/v1/blobs`, { method: "OPTIONS" });
-    if (res.status === 200 || res.status === 204 || res.status === 405)
-      console.log("🌐 Walrus Publisher reachable ✅");
-    else
-      console.log("⚠️ Walrus Publisher response:", res.status);
-  } catch (e) {
-    console.log("❌ Unable to reach Walrus Publisher:", e.message);
-  }
-})();
+const server = http.createServer((req, res) => {
+    // Serve static files
+    let filePath = '.' + req.url;
+    if (filePath === './') {
+        filePath = './index.html';
+    }
 
+    const extname = String(path.extname(filePath)).toLowerCase();
+    const mimeTypes = {
+        '.html': 'text/html',
+        '.js': 'text/javascript',
+        '.css': 'text/css',
+        '.json': 'application/json',
+        '.png': 'image/png',
+        '.jpg': 'image/jpg',
+        '.gif': 'image/gif',
+        '.svg': 'image/svg+xml',
+        '.wav': 'audio/wav',
+        '.mp4': 'video/mp4',
+        '.woff': 'application/font-woff',
+        '.ttf': 'application/font-ttf',
+        '.eot': 'application/vnd.ms-fontobject',
+        '.otf': 'application/font-otf',
+        '.wasm': 'application/wasm'
+    };
 
-// ✅ Create HTTP + WebSocket servers
-const server = http.createServer();
+    const contentType = mimeTypes[extname] || 'application/octet-stream';
+
+    fs.readFile(filePath, (error, content) => {
+        if (error) {
+            if (error.code === 'ENOENT') {
+                res.writeHead(404, { 'Content-Type': 'text/html' });
+                res.end('<h1>404 - File Not Found</h1>', 'utf-8');
+            } else {
+                res.writeHead(500);
+                res.end(`Server Error: ${error.code}`, 'utf-8');
+            }
+        } else {
+            res.writeHead(200, { 'Content-Type': contentType });
+            res.end(content, 'utf-8');
+        }
+    });
+});
+
 const wss = new WebSocket.Server({ server });
 
 // ✅ Define the OPEN constant for socket state checking
@@ -186,6 +213,10 @@ wss.on('connection', (ws, req) => {
             case 'LEVEL_COMPLETE':
                 // Client notifies server of level completion (handled in handleWordFound)
                 break;
+            case 'PLAYER_LEVEL_COMPLETE':
+                // Player completed their level independently
+                handlePlayerLevelComplete(ws, data);
+                break;
             case 'GAME_OVER':
                 // Client notifies server of game over (handled in handleWordFound or handleLevelTimeUp)
                 break;
@@ -195,22 +226,43 @@ wss.on('connection', (ws, req) => {
     }
 
     function handleCreateRoom(ws, data) {
+        console.log('=== handleCreateRoom called ===');
+        console.log('Received data:', data);
+        
         const roomCode = generateRoomCode();
+        console.log('Generated room code:', roomCode);
+        
         playerId = data.playerId || `player_${Date.now()}_${Math.random()}`;
+        console.log('Using playerId:', playerId);
+        
         const room = new GameRoom(roomCode, playerId);
         
-        room.addPlayer(playerId, ws, data.playerName);
+        const added = room.addPlayer(playerId, ws, data.playerName);
+        if (!added) {
+            console.error('Failed to add player to room');
+            sendError(ws, 'Failed to create room - room is full');
+            return;
+        }
+        
         rooms.set(roomCode, room);
         currentRoom = room;
 
-        ws.send(JSON.stringify({
+        const response = {
             type: 'ROOM_CREATED',
-            roomCode,
-            playerId,
+            roomCode: roomCode,
+            playerId: playerId,
             playerNumber: 1
-        }));
-
-        console.log(`Room ${roomCode} created by player ${playerId}`);
+        };
+        
+        console.log('Sending ROOM_CREATED response:', response);
+        
+        try {
+            ws.send(JSON.stringify(response));
+            console.log(`✓ Room ${roomCode} created successfully by player ${playerId}`);
+        } catch (error) {
+            console.error('✗ Error sending ROOM_CREATED:', error);
+            sendError(ws, 'Error creating room: ' + error.message);
+        }
     }
 
     function handleJoinRoom(ws, data) {
@@ -366,12 +418,25 @@ wss.on('connection', (ws, req) => {
             currentLevel: currentLevel
         };
         
-        // Set synchronized timer start time
-        const levelStartTime = Date.now();
-        currentRoom.levelStartTime = levelStartTime;
-        currentRoom.levelTimer = setTimeout(() => {
-            handleLevelTimeUp(currentRoom);
-        }, 120000); // 2 minutes = 120000ms
+        // Set synchronized timer start time (only on first level, continue for subsequent levels)
+        if (!currentRoom.levelStartTime || currentLevel === 1) {
+            // First level or reset - start the timer
+            const levelStartTime = Date.now();
+            currentRoom.levelStartTime = levelStartTime;
+            // Clear existing timer if any
+            if (currentRoom.levelTimer) {
+                clearTimeout(currentRoom.levelTimer);
+            }
+            currentRoom.levelTimer = setTimeout(() => {
+                handleLevelTimeUp(currentRoom);
+            }, 120000); // 2 minutes = 120000ms total for all levels
+            console.log('Timer started for level', currentLevel);
+        } else {
+            // Subsequent level - timer continues, don't reset
+            console.log('Timer continuing for level', currentLevel, '(cumulative, started at', new Date(currentRoom.levelStartTime).toLocaleTimeString(), ')');
+        }
+        
+        const levelStartTime = currentRoom.levelStartTime || Date.now();
         
         // Send game config to each player (including the grid so both players see the same puzzle)
         // IMPORTANT: Send to ALL players including the host
@@ -398,7 +463,7 @@ wss.on('connection', (ws, req) => {
                 const message = {
                     type: 'GAME_STARTED',
                     gameConfig: gameConfig, // Send config with grid so both players see the same puzzle
-                    levelStartTime: levelStartTime,
+                    levelStartTime: currentRoom.levelStartTime || levelStartTime, // Use existing start time if available (cumulative)
                     currentLevel: currentLevel
                 };
                 
@@ -625,21 +690,41 @@ wss.on('connection', (ws, req) => {
         console.log(`Level ${completedLevel} completed in room ${room.roomCode}, advancing to level ${nextLevel}`);
     }
 
+    function handlePlayerLevelComplete(ws, data) {
+        if (!currentRoom) {
+            sendError(ws, 'Not in a room');
+            return;
+        }
+
+        const { playerNumber, completedLevel, nextLevel, playerScores } = data;
+        
+        // Update player scores
+        if (playerScores) {
+            currentRoom.gameState.playerScores = playerScores;
+        }
+        
+        // Broadcast player level completion to all players (for score updates)
+        // Note: Each player advances independently, so we just update scores
+        currentRoom.broadcast({
+            type: 'PLAYER_LEVEL_COMPLETE',
+            playerNumber: playerNumber,
+            completedLevel: completedLevel,
+            nextLevel: nextLevel,
+            playerScores: currentRoom.gameState.playerScores
+        });
+        
+        console.log(`Player ${playerNumber} completed level ${completedLevel} in room ${currentRoom.roomCode}, advancing to level ${nextLevel}`);
+    }
+
     function handleLevelTimeUp(room) {
         // Clear timer
         if (room.levelTimer) {
             clearTimeout(room.levelTimer);
         }
         
-        const currentLevel = room.gameState.currentLevel || 1;
-        
-        if (currentLevel < 3) {
-            // Move to next level
-            handleLevelComplete(room, currentLevel);
-        } else {
-            // Game over - all levels completed
-            handleGameOver(room);
-        }
+        // Timer ended - immediately end the game for all players
+        // Don't advance to next level, game is over
+        handleGameOver(room);
     }
 
     async function handleGameOver(room) {
@@ -707,7 +792,8 @@ wss.on('connection', (ws, req) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`WebSocket server running on port ${PORT}`);
-    console.log(`Connect to: ws://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Open in browser: http://localhost:${PORT}`);
+    console.log(`WebSocket endpoint: ws://localhost:${PORT}`);
 });
 

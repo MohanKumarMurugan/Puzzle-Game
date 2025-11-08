@@ -32,10 +32,19 @@ class FindWordsGame {
         // Level system properties
         this.currentLevel = 1; // 1 = Easy, 2 = Medium, 3 = Hard
         this.levelDifficulties = ['easy', 'medium', 'hard'];
-        this.levelTimeLimit = 120; // 2 minutes in seconds
+        this.levelTimeLimit = 120; // Total 2 minutes for all levels combined
         this.levelTimer = null; // Countdown timer
         this.levelStartTime = null; // Server-synchronized start time
         this.levelTimerInterval = null;
+        this.totalGameTime = 0; // Track total time played
+        this.playerLevels = { 1: 1, 2: 1 }; // Track each player's current level independently
+        
+        // Level configurations
+        this.levelConfigs = {
+            1: { gridSize: 10, wordCount: 7, difficulty: 'easy' },    // Easy
+            2: { gridSize: 12, wordCount: 10, difficulty: 'medium' }, // Medium
+            3: { gridSize: 15, wordCount: 15, difficulty: 'hard' }    // Hard
+        };
         
         // Multiplayer WebSocket properties
         this.ws = null;
@@ -64,6 +73,8 @@ class FindWordsGame {
         this.bindEvents();
         // Auto-set multiplayer mode
         this.setPlayerMode('multiplayer');
+        // Auto-connect to WebSocket server on page load
+        this.connectWebSocket();
         // Don't auto-start game, wait for room creation
     }
 
@@ -116,10 +127,15 @@ class FindWordsGame {
         });
         document.getElementById('clearWords').addEventListener('click', () => this.clearCustomWords());
         
-        // Modal
+        // Modal buttons
         document.getElementById('playAgain').addEventListener('click', () => {
             document.getElementById('winModal').classList.add('hidden');
-            this.newGame();
+            this.resetGameForNewRound();
+        });
+        
+        document.getElementById('closeRoom').addEventListener('click', () => {
+            document.getElementById('winModal').classList.add('hidden');
+            this.leaveRoom();
         });
 
         // Grid interaction will be bound dynamically when grid is created
@@ -194,16 +210,22 @@ class FindWordsGame {
         this.currentPlayer = 1;
         // Keep playerScores and playerFoundWords - they persist across levels
         
-        // Stop existing timers
+        // Stop existing timers (but don't reset levelStartTime - it continues across levels)
         if (this.timerInterval) {
             clearInterval(this.timerInterval);
         }
-        if (this.levelTimerInterval) {
-            clearInterval(this.levelTimerInterval);
-        }
+        // Don't clear levelTimerInterval here - it continues across levels
+        // Only clear it when game ends or time is up
         
-        // Set difficulty based on current level
-        this.difficulty = this.levelDifficulties[this.currentLevel - 1];
+        // Get level configuration based on current player's level in multiplayer mode
+        let levelToUse = this.currentLevel;
+        if (this.playerMode === 'multiplayer' && this.playerNumber) {
+            // Use this player's specific level, not the shared currentLevel
+            levelToUse = this.playerLevels[this.playerNumber] || this.currentLevel;
+        }
+        const levelConfig = this.levelConfigs[levelToUse] || this.levelConfigs[1];
+        this.gridSize = levelConfig.gridSize;
+        this.difficulty = levelConfig.difficulty;
         
         // Try to update difficulty selector if it exists (may be hidden in multiplayer)
         const difficultySelect = document.getElementById('difficulty');
@@ -211,8 +233,14 @@ class FindWordsGame {
             difficultySelect.value = this.difficulty;
         }
         
-        // Generate words based on current level difficulty
-        this.generateRandomWords();
+        // Update grid size selector if it exists
+        const gridSizeSelect = document.getElementById('gridSize');
+        if (gridSizeSelect) {
+            gridSizeSelect.value = this.gridSize;
+        }
+        
+        // Generate words based on current level difficulty and word count
+        this.generateRandomWords(levelConfig.wordCount);
         
         // Debug logging
         console.log('Generated words:', this.words);
@@ -286,13 +314,15 @@ class FindWordsGame {
 
     /**
      * Generate random words for current level difficulty
+     * @param {number} wordCount - Number of words to generate for this level
      */
-    generateRandomWords() {
+    generateRandomWords(wordCount = 8) {
         // Use words from current difficulty level
         const levelWords = this.wordLists[this.difficulty] || this.wordLists.medium;
         
         // Debug logging
         console.log('generateRandomWords - difficulty:', this.difficulty);
+        console.log('generateRandomWords - wordCount:', wordCount);
         console.log('generateRandomWords - levelWords:', levelWords);
         
         if (!levelWords || levelWords.length === 0) {
@@ -301,8 +331,8 @@ class FindWordsGame {
             return;
         }
         
-        // Select 8 words for the level (or all if less than 8)
-        const numWords = Math.min(8, levelWords.length);
+        // Select specified number of words for the level (or all if less than requested)
+        const numWords = Math.min(wordCount, levelWords.length);
         this.words = [];
         
         const shuffled = [...levelWords].sort(() => Math.random() - 0.5);
@@ -310,7 +340,7 @@ class FindWordsGame {
             this.words.push(shuffled[i]);
         }
         
-        console.log('Generated', this.words.length, 'words:', this.words);
+        console.log('Generated', this.words.length, 'words for level', this.currentLevel, ':', this.words);
     }
 
     /**
@@ -776,13 +806,17 @@ class FindWordsGame {
             clearInterval(this.levelTimerInterval);
         }
         
-        this.levelTimer = this.levelTimeLimit; // 2 minutes in seconds
+        // Don't reset timer - use cumulative time across all levels
+        // levelStartTime is set once at game start and continues
         
         this.levelTimerInterval = setInterval(() => {
             if (this.levelStartTime) {
-                // Calculate elapsed time from server-synchronized start
+                // Calculate elapsed time from server-synchronized start (cumulative)
                 const elapsed = Math.floor((Date.now() - this.levelStartTime) / 1000);
                 const remaining = Math.max(0, this.levelTimeLimit - elapsed);
+                
+                // Store total game time
+                this.totalGameTime = elapsed;
                 
                 if (remaining <= 0) {
                     // Time's up!
@@ -798,7 +832,12 @@ class FindWordsGame {
                 document.getElementById('timer').textContent = timeString;
             } else {
                 // Fallback: countdown from levelTimeLimit
+                if (!this.levelTimer) {
+                    this.levelTimer = this.levelTimeLimit;
+                }
                 this.levelTimer--;
+                this.totalGameTime = this.levelTimeLimit - this.levelTimer;
+                
                 if (this.levelTimer <= 0) {
                     this.handleLevelTimeUp();
                     return;
@@ -814,39 +853,183 @@ class FindWordsGame {
 
     handleLevelTimeUp() {
         clearInterval(this.levelTimerInterval);
+        this.gameStarted = false;
         
-        // End current level - determine if game continues or ends
-        if (this.currentLevel < 3) {
-            // Move to next level
-            this.advanceToNextLevel();
-        } else {
-            // Game over - all levels completed
-            this.endGame();
-        }
+        // Show "Times Up" message
+        alert('⏰ Times Up!');
+        
+        // Update timer display to show 00:00
+        document.getElementById('timer').textContent = '00:00';
+        
+        // Timer ended - immediately end the game and show results
+        // Don't advance to next level, game is over
+        this.endGame();
     }
 
     advanceToNextLevel() {
-        // Move to next level
-        this.currentLevel++;
+        // Don't reset timer - it continues across levels
+        // Calculate time used in this level
+        const levelTimeUsed = this.totalGameTime || 0;
         
-        // Notify server if host
-        if (this.playerMode === 'multiplayer' && this.isHost && this.wsConnected) {
-            this.sendWebSocketMessage({
-                type: 'LEVEL_COMPLETE',
-                currentLevel: this.currentLevel - 1,
-                nextLevel: this.currentLevel,
-                playerScores: this.playerScores
-            });
+        // In multiplayer mode, track each player's level independently
+        if (this.playerMode === 'multiplayer' && this.playerNumber) {
+            const currentPlayerLevel = this.playerLevels[this.playerNumber] || this.currentLevel;
+            console.log(`Player ${this.playerNumber} completed Level ${currentPlayerLevel} in ${levelTimeUsed} seconds`);
+            
+            // Move this player to next level
+            const nextLevel = currentPlayerLevel + 1;
+            this.playerLevels[this.playerNumber] = nextLevel;
+            this.currentLevel = nextLevel; // Update current level for this player's view
+            
+            // Check if this player has more levels
+            if (nextLevel > 3) {
+                // This player completed all levels
+                this.endGame();
+                return;
+            }
+            
+            // Notify server about player's level completion (for score updates only)
+            if (this.wsConnected) {
+                this.sendWebSocketMessage({
+                    type: 'PLAYER_LEVEL_COMPLETE',
+                    playerNumber: this.playerNumber,
+                    completedLevel: currentPlayerLevel,
+                    nextLevel: nextLevel,
+                    playerScores: this.playerScores,
+                    totalGameTime: this.totalGameTime
+                });
+            }
+            
+            // Show level transition message
+            const levelNames = { 1: 'Easy', 2: 'Medium', 3: 'Hard' };
+            alert(`Level ${currentPlayerLevel} (${levelNames[currentPlayerLevel]}) Complete!\n\nStarting Level ${nextLevel} (${levelNames[nextLevel]})...`);
+            
+            // Reset found words for this player for the new level
+            this.playerFoundWords[this.playerNumber] = new Set();
+            this.foundWords.clear(); // Clear shared found words for new level
+            
+            // Generate and start next level for THIS PLAYER ONLY (not broadcast to others)
+            this.generateNextLevelForPlayer(nextLevel);
+        } else {
+            // Single player or local 2-player mode
+            console.log(`Level ${this.currentLevel} completed in ${levelTimeUsed} seconds`);
+            
+            // Move to next level
+            this.currentLevel++;
+            
+            // Check if there are more levels
+            if (this.currentLevel > 3) {
+                // All levels completed
+                this.endGame();
+                return;
+            }
+            
+            // Show level transition message
+            const levelNames = { 1: 'Easy', 2: 'Medium', 3: 'Hard' };
+            alert(`Level ${this.currentLevel - 1} (${levelNames[this.currentLevel - 1]}) Complete!\n\nStarting Level ${this.currentLevel} (${levelNames[this.currentLevel]})...`);
+            
+            // Start next level
+            this.newGame();
+            
+            // Auto-start next level after a brief delay
+            setTimeout(() => {
+                if (this.isHost || this.playerMode !== 'multiplayer') {
+                    this.startGame();
+                }
+            }, 2000);
+        }
+    }
+
+    /**
+     * Generate and start next level for a specific player (multiplayer only)
+     * This is called independently for each player when they complete their level
+     */
+    generateNextLevelForPlayer(level) {
+        // Get level configuration
+        const levelConfig = this.levelConfigs[level] || this.levelConfigs[1];
+        this.gridSize = levelConfig.gridSize;
+        this.difficulty = levelConfig.difficulty;
+        
+        // Update difficulty selector if it exists
+        const difficultySelect = document.getElementById('difficulty');
+        if (difficultySelect) {
+            difficultySelect.value = this.difficulty;
         }
         
-        // Start next level
-        this.newGame();
+        // Update grid size selector if it exists
+        const gridSizeSelect = document.getElementById('gridSize');
+        if (gridSizeSelect) {
+            gridSizeSelect.value = this.gridSize;
+        }
         
-        // Auto-start next level after a brief delay
+        // Generate words based on current level difficulty and word count
+        this.generateRandomWords(levelConfig.wordCount);
+        
+        // Debug logging
+        console.log(`Player ${this.playerNumber} generated Level ${level} puzzle:`, this.words);
+        console.log('Difficulty:', this.difficulty);
+        console.log('Grid size:', this.gridSize);
+        
+        if (this.words.length === 0) {
+            alert('Error generating words! Please try again.');
+            console.error('Word generation failed. Difficulty:', this.difficulty, 'WordLists:', this.wordLists);
+            return;
+        }
+        
+        // Reset game state for new level
+        this.foundWords.clear();
+        this.selectedCells = [];
+        this.startCell = null;
+        this.isSelecting = false;
+        this.hintedCells = [];
+        this.hintCooldown = false;
+        this.placedWords = [];
+        this.currentHintWordIndex = -1;
+        this.gameStarted = false;
+        
+        // Create and populate grid
+        this.createGrid();
+        this.placeWords();
+        this.fillEmptySpaces();
+        this.renderGrid();
+        this.renderWordsList();
+        this.updateStats();
+        this.updatePlayerStats();
+        this.updatePlayerTurnIndicator();
+        
+        // Show words section
+        this.showWordsSection();
+        
+        // Show start overlay (player needs to click Start to begin their next level)
+        this.showStartOverlay();
+        
+        // Clear current selection display
+        const currentSelectionEl = document.getElementById('currentSelection');
+        if (currentSelectionEl) currentSelectionEl.textContent = '-';
+        
+        // Store words
+        if (this.words && this.words.length > 0) {
+            console.log(`✓ Player ${this.playerNumber} Level ${level} puzzle ready! Words stored:`, this.words.length, 'words');
+            this._backupWords = [...this.words];
+        } else {
+            console.error('✗ Puzzle generation failed - no words!');
+        }
+        
+        // Auto-start this player's next level after a brief delay
+        // Note: This only starts for THIS player, not broadcast to others
         setTimeout(() => {
-            if (this.isHost) {
-                this.startGame();
-            }
+            // Start the game locally for this player only
+            this.gameStarted = true;
+            const startOverlay = document.getElementById('startOverlay');
+            const grid = document.getElementById('grid');
+            
+            if (startOverlay) startOverlay.classList.add('hidden');
+            if (grid) grid.classList.remove('blurred');
+            
+            // Start timer (continues from previous level)
+            this.startTimer();
+            
+            console.log(`Player ${this.playerNumber} started Level ${level} independently`);
         }, 2000);
     }
 
@@ -880,25 +1063,55 @@ class FindWordsGame {
     }
 
     showGameOverModal(winner) {
-        document.getElementById('finalPlayer1Score').textContent = this.playerScores[1];
-        document.getElementById('finalPlayer2Score').textContent = this.playerScores[2];
+        // Update final scores
+        const player1Score = this.playerScores[1] || 0;
+        const player2Score = this.playerScores[2] || 0;
+        const totalScore = player1Score + player2Score; // Overall total score
         
+        const finalPlayer1ScoreEl = document.getElementById('finalPlayer1Score');
+        const finalPlayer2ScoreEl = document.getElementById('finalPlayer2Score');
+        if (finalPlayer1ScoreEl) finalPlayer1ScoreEl.textContent = player1Score;
+        if (finalPlayer2ScoreEl) finalPlayer2ScoreEl.textContent = player2Score;
+        
+        // Calculate total time
+        const totalTime = this.totalGameTime || 0;
+        const minutes = Math.floor(totalTime / 60);
+        const seconds = totalTime % 60;
+        const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        
+        // Determine and display winner
         let winnerText = '';
+        let winnerMessage = '';
+        const currentPlayerNum = this.playerNumber || 1; // Default to player 1 if not set
+        
         if (winner === 0) {
             winnerText = "It's a Tie! 🤝";
-        } else if (winner === this.playerNumber) {
+            winnerMessage = `Both players scored ${player1Score} points!\n\nTotal Score: ${totalScore} points\nTotal Time: ${timeString}`;
+        } else if (winner === currentPlayerNum) {
             winnerText = 'You Win! 🎉';
+            winnerMessage = `Congratulations! You scored ${this.playerScores[currentPlayerNum] || 0} points!\n\nTotal Score: ${totalScore} points\nTotal Time: ${timeString}`;
         } else {
             winnerText = 'You Lost! 😔';
+            const winnerScore = winner === 1 ? player1Score : player2Score;
+            const yourScore = this.playerScores[currentPlayerNum] || 0;
+            winnerMessage = `Player ${winner} won with ${winnerScore} points.\nYou scored ${yourScore} points.\n\nTotal Score: ${totalScore} points\nTotal Time: ${timeString}`;
         }
         
-        document.getElementById('winTitle').textContent = winnerText;
-        document.getElementById('winMessage').textContent = 'All levels completed!';
-        document.getElementById('winStats').classList.add('hidden');
-        document.getElementById('playerWinStats').classList.remove('hidden');
+        const winTitleEl = document.getElementById('winTitle');
+        const winMessageEl = document.getElementById('winMessage');
+        const winStatsEl = document.getElementById('winStats');
+        const playerWinStatsEl = document.getElementById('playerWinStats');
+        const winModalEl = document.getElementById('winModal');
+        
+        if (winTitleEl) winTitleEl.textContent = winnerText;
+        if (winMessageEl) winMessageEl.textContent = winnerMessage;
+        if (winStatsEl) winStatsEl.classList.add('hidden');
+        if (playerWinStatsEl) playerWinStatsEl.classList.remove('hidden');
         
         setTimeout(() => {
-            document.getElementById('winModal').classList.remove('hidden');
+            if (winModalEl) {
+                winModalEl.classList.remove('hidden');
+            }
         }, 500);
     }
 
@@ -909,12 +1122,51 @@ class FindWordsGame {
         const startOverlay = document.getElementById('startOverlay');
         const grid = document.getElementById('grid');
         
-        startOverlay.classList.remove('hidden');
-        grid.classList.add('blurred');
+        if (startOverlay) {
+            startOverlay.classList.remove('hidden');
+        }
+        if (grid) {
+            grid.classList.add('blurred');
+        }
+        
+        // Hide words section when showing start overlay
+        this.hideWordsSection();
         
         // Reset timer displays
-        document.getElementById('timer').textContent = '00:00';
-        document.getElementById('gameTimer').textContent = '00:00';
+        const timerEl = document.getElementById('timer');
+        if (timerEl) timerEl.textContent = '00:00';
+        const gameTimerEl = document.getElementById('gameTimer');
+        if (gameTimerEl) gameTimerEl.textContent = '00:00';
+    }
+
+    /**
+     * Show words-to-find section in full width (when game starts)
+     */
+    showWordsSection() {
+        const wordsToFind = document.getElementById('wordsToFindSection');
+        const gridWordsContainer = document.querySelector('.grid-words-container');
+        
+        if (wordsToFind) {
+            wordsToFind.classList.remove('hidden');
+        }
+        if (gridWordsContainer) {
+            gridWordsContainer.classList.add('words-visible');
+        }
+    }
+
+    /**
+     * Hide words-to-find section
+     */
+    hideWordsSection() {
+        const wordsToFind = document.getElementById('wordsToFindSection');
+        const gridWordsContainer = document.querySelector('.grid-words-container');
+        
+        if (wordsToFind) {
+            wordsToFind.classList.add('hidden');
+        }
+        if (gridWordsContainer) {
+            gridWordsContainer.classList.remove('words-visible');
+        }
     }
 
     /**
@@ -1046,8 +1298,12 @@ class FindWordsGame {
             const grid = document.getElementById('grid');
             
             // Hide start overlay and remove blur
-            startOverlay.classList.add('hidden');
-            grid.classList.remove('blurred');
+            if (startOverlay) startOverlay.classList.add('hidden');
+            if (grid) grid.classList.remove('blurred');
+            
+            // Show words-to-find section in full width for both players
+            this.showWordsSection();
+            
             this.startTimer();
         }
     }
@@ -1056,14 +1312,33 @@ class FindWordsGame {
      * Check if player has won
      */
     checkWinCondition() {
-        if (this.foundWords.size === this.words.length) {
-            // Level completed! Advance to next level or end game
-            if (this.currentLevel < 3) {
-                // Advance to next level
-                this.advanceToNextLevel();
-            } else {
-                // All levels completed - end game
-                this.endGame();
+        // In multiplayer mode, check if current player has completed their level
+        if (this.playerMode === 'multiplayer' && this.playerNumber) {
+            const currentPlayerLevel = this.playerLevels[this.playerNumber] || this.currentLevel;
+            const currentPlayerFoundWords = this.playerFoundWords[this.playerNumber] || new Set();
+            
+            // Check if current player has found all words in their current level
+            if (currentPlayerFoundWords.size === this.words.length) {
+                // Player completed their level! Advance to next level or end game
+                if (currentPlayerLevel < 3) {
+                    // Advance this player to next level
+                    this.advanceToNextLevel();
+                } else {
+                    // All levels completed - end game for this player
+                    this.endGame();
+                }
+            }
+        } else {
+            // Single player or local 2-player mode - use shared foundWords
+            if (this.foundWords.size === this.words.length) {
+                // Level completed! Advance to next level or end game
+                if (this.currentLevel < 3) {
+                    // Advance to next level
+                    this.advanceToNextLevel();
+                } else {
+                    // All levels completed - end game
+                    this.endGame();
+                }
             }
         }
     }
@@ -1073,13 +1348,22 @@ class FindWordsGame {
      */
     updatePlayerStats() {
         if (this.playerMode === 'two' || this.playerMode === 'multiplayer') {
-            document.getElementById('player1Score').textContent = this.playerScores[1];
-            document.getElementById('player2Score').textContent = this.playerScores[2];
+            // Ensure scores are numbers, default to 0 if undefined
+            const player1Score = this.playerScores[1] || 0;
+            const player2Score = this.playerScores[2] || 0;
+            
+            // Update sidebar scores
+            const player1ScoreEl = document.getElementById('player1Score');
+            const player2ScoreEl = document.getElementById('player2Score');
+            if (player1ScoreEl) player1ScoreEl.textContent = player1Score;
+            if (player2ScoreEl) player2ScoreEl.textContent = player2Score;
             
             // Update score display above game box (multiplayer)
             if (this.playerMode === 'multiplayer') {
-                document.getElementById('player1PointsDisplay').textContent = this.playerScores[1];
-                document.getElementById('player2PointsDisplay').textContent = this.playerScores[2];
+                const player1PointsEl = document.getElementById('player1PointsDisplay');
+                const player2PointsEl = document.getElementById('player2PointsDisplay');
+                if (player1PointsEl) player1PointsEl.textContent = player1Score;
+                if (player2PointsEl) player2PointsEl.textContent = player2Score;
             }
             
             this.updatePlayerTurnIndicator();
@@ -1291,15 +1575,22 @@ class FindWordsGame {
             this.ws.onopen = () => {
                 this.wsConnected = true;
                 this.updateConnectionStatus('connected', 'Connected');
-                console.log('WebSocket connected');
+                console.log('WebSocket connected successfully');
                 
-                // Execute any pending actions
-                while (this.pendingActions.length > 0) {
-                    const action = this.pendingActions.shift();
-                    if (action && typeof action === 'function') {
-                        action();
+                // Execute any pending actions after a short delay to ensure connection is fully established
+                setTimeout(() => {
+                    console.log('Executing', this.pendingActions.length, 'pending actions');
+                    while (this.pendingActions.length > 0) {
+                        const action = this.pendingActions.shift();
+                        if (action && typeof action === 'function') {
+                            try {
+                                action();
+                            } catch (error) {
+                                console.error('Error executing pending action:', error);
+                            }
+                        }
                     }
-                }
+                }, 100);
             };
 
             this.ws.onmessage = (event) => {
@@ -1395,21 +1686,57 @@ class FindWordsGame {
                 alert('Error sending message to server: ' + error.message);
             }
         } else {
-            console.error('WebSocket not connected. State:', this.ws ? this.ws.readyState : 'no ws object');
-            alert('Not connected to server. Please check your connection.');
+            const state = this.ws ? this.ws.readyState : 'no ws object';
+            const stateNames = {
+                0: 'CONNECTING',
+                1: 'OPEN',
+                2: 'CLOSING',
+                3: 'CLOSED'
+            };
+            console.error('WebSocket not connected. State:', state, stateNames[state] || 'UNKNOWN');
+            
+            // Try to reconnect if not already connecting
+            if (!this.ws || this.ws.readyState !== WebSocket.CONNECTING) {
+                console.log('Attempting to reconnect...');
+                this.connectWebSocket();
+                // Queue the message to send after reconnection
+                setTimeout(() => {
+                    if (this.wsConnected) {
+                        this.sendWebSocketMessage(message);
+                    } else {
+                        this.pendingActions.push(() => this.sendWebSocketMessage(message));
+                    }
+                }, 500);
+            } else {
+                // Connection in progress, queue the message
+                this.pendingActions.push(() => this.sendWebSocketMessage(message));
+            }
         }
     }
 
     handleWebSocketMessage(data) {
         switch (data.type) {
             case 'ROOM_CREATED':
+                console.log('ROOM_CREATED message received:', data);
+                if (!data.roomCode) {
+                    console.error('ERROR: Room code missing in ROOM_CREATED message!', data);
+                    alert('Error: Room code not received from server. Please try again.');
+                    return;
+                }
                 this.roomCode = data.roomCode;
                 this.playerId = data.playerId;
-                this.playerNumber = data.playerNumber;
+                this.playerNumber = data.playerNumber || 1;
                 this.isHost = true;
+                console.log('Room created! Code:', this.roomCode, 'Player ID:', this.playerId);
                 this.updateRoomUI();
                 // Show score display in multiplayer mode
-                document.getElementById('playerScoresDisplay').classList.remove('hidden');
+                const playerScoresDisplay = document.getElementById('playerScoresDisplay');
+                if (playerScoresDisplay) {
+                    playerScoresDisplay.classList.remove('hidden');
+                }
+                // Initialize and display player scores
+                this.playerScores = { 1: 0, 2: 0 };
+                this.updatePlayerStats();
                 break;
 
             case 'ROOM_JOINED':
@@ -1420,6 +1747,13 @@ class FindWordsGame {
                 this.updateRoomUI();
                 // Show score display in multiplayer mode
                 document.getElementById('playerScoresDisplay').classList.remove('hidden');
+                // Initialize player scores
+                if (data.gameState && data.gameState.playerScores) {
+                    this.playerScores = { ...data.gameState.playerScores };
+                } else {
+                    this.playerScores = { 1: 0, 2: 0 };
+                }
+                this.updatePlayerStats();
                 
                 // Sync game state if game already started
                 if (data.gameState && data.gameState.gameStarted) {
@@ -1445,6 +1779,23 @@ class FindWordsGame {
 
             case 'GAME_STARTED':
                 console.log('Received GAME_STARTED message', data);
+                
+                // IMPORTANT: In multiplayer mode, if this player has already advanced to a higher level,
+                // ignore GAME_STARTED messages that would reset them back (unless it's the initial game start)
+                if (this.playerMode === 'multiplayer' && this.playerNumber && this.playerLevels) {
+                    const myCurrentLevel = this.playerLevels[this.playerNumber] || 1;
+                    const serverLevel = data.gameConfig?.currentLevel || data.currentLevel || 1;
+                    
+                    // If this player is already on a higher level than what the server is sending,
+                    // this GAME_STARTED is probably from another player completing their level
+                    // Don't process it - keep this player on their current level
+                    if (myCurrentLevel > serverLevel && serverLevel > 1) {
+                        console.log(`Player ${this.playerNumber} ignoring GAME_STARTED - already on level ${myCurrentLevel}, server sent level ${serverLevel}`);
+                        console.log('This GAME_STARTED is likely from another player - preserving independent progression');
+                        break; // Don't process this message
+                    }
+                }
+                
                 // Receive game config and use the same puzzle (grid) for all players
                 if (data.gameConfig) {
                     console.log('Processing gameConfig:', data.gameConfig);
@@ -1455,10 +1806,25 @@ class FindWordsGame {
                     this.difficulty = data.gameConfig.difficulty || 'medium';
                     this.customWords = data.gameConfig.customWords || [];
                     this.currentLevel = data.gameConfig.currentLevel || 1;
+                    // Initialize player scores - ensure both players have scores
                     this.playerScores = data.gameConfig.playerScores || { 1: 0, 2: 0 };
+                    if (!this.playerScores[1]) this.playerScores[1] = 0;
+                    if (!this.playerScores[2]) this.playerScores[2] = 0;
                     this.foundWords = new Set();
                     this.playerFoundWords = { 1: new Set(), 2: new Set() };
                     this.currentPlayer = 1;
+                    // Only initialize player levels on the very first game start (level 1)
+                    // Don't reset if players have already progressed to higher levels
+                    if (!this.playerLevels || (data.gameConfig.currentLevel === 1 && this.playerLevels[1] === 1 && this.playerLevels[2] === 1)) {
+                        this.playerLevels = { 1: 1, 2: 1 };
+                    } else {
+                        // Preserve existing player levels - each player progresses independently
+                        // Only update the current player's level if this is their first game
+                        if (!this.playerLevels[this.playerNumber] || this.playerLevels[this.playerNumber] === 1) {
+                            // Keep existing levels for both players
+                            console.log(`Preserving player levels: Player 1 = ${this.playerLevels[1]}, Player 2 = ${this.playerLevels[2]}`);
+                        }
+                    }
                     
                     // Use the grid from server so both players see the same puzzle
                     if (data.gameConfig.grid && Array.isArray(data.gameConfig.grid) && data.gameConfig.grid.length > 0) {
@@ -1523,15 +1889,37 @@ class FindWordsGame {
                 }
                 
                 this.gameStarted = true;
-                // Use server-synchronized timer start time
+                // Use server-synchronized timer start time (cumulative - don't reset if already set)
                 if (data.levelStartTime) {
-                    this.levelStartTime = data.levelStartTime;
+                    // Only set if not already set (first level) or if explicitly reset
+                    if (!this.levelStartTime || data.currentLevel === 1) {
+                        this.levelStartTime = data.levelStartTime;
+                        console.log('Timer start time set:', new Date(this.levelStartTime).toLocaleTimeString());
+                    } else {
+                        console.log('Timer continuing from:', new Date(this.levelStartTime).toLocaleTimeString());
+                    }
                 }
-                if (data.currentLevel) {
-                    this.currentLevel = data.currentLevel;
+                // IMPORTANT: Don't update currentLevel from server in multiplayer mode
+                // Each player has their own level progression
+                // Only update if it's the initial game start (level 1) or in single player mode
+                if (this.playerMode !== 'multiplayer') {
+                    if (data.currentLevel) {
+                        this.currentLevel = data.currentLevel;
+                    }
+                } else {
+                    // In multiplayer, use this player's own level, not the server's
+                    // The server's currentLevel might be from another player
+                    const myLevel = this.playerLevels[this.playerNumber] || this.currentLevel || 1;
+                    this.currentLevel = myLevel;
+                    console.log(`Player ${this.playerNumber} using their own level: ${myLevel} (not server's level ${data.currentLevel || 'N/A'})`);
                 }
+                
+                // Show words-to-find section in full width for both players when game starts
+                this.showWordsSection();
+                
+                // Restart timer countdown (but using existing levelStartTime for cumulative time)
                 this.startTimer();
-                console.log('Game started for player', this.playerNumber);
+                console.log('Game started for player', this.playerNumber, 'at level', this.currentLevel);
                 break;
 
             case 'LEVEL_COMPLETE':
@@ -1551,12 +1939,34 @@ class FindWordsGame {
                 }, 2000);
                 break;
 
-            case 'GAME_OVER':
-                // Game over - show winner
+            case 'TIME_UP':
+                // Time's up - show message and update scores
                 if (data.playerScores) {
                     this.playerScores = data.playerScores;
+                    this.updatePlayerStats();
                 }
-                this.showGameOverModal(data.winner);
+                this.handleLevelTimeUp();
+                break;
+
+            case 'GAME_OVER':
+                // Game over - show winner
+                console.log('GAME_OVER received:', data);
+                // Ensure game is stopped
+                this.gameStarted = false;
+                clearInterval(this.levelTimerInterval);
+                
+                // Update scores
+                if (data.playerScores) {
+                    this.playerScores = {
+                        1: data.playerScores[1] || 0,
+                        2: data.playerScores[2] || 0
+                    };
+                    this.updatePlayerStats();
+                }
+                
+                // Show modal with winner (default to 0/tie if not provided)
+                const winner = data.winner !== undefined ? data.winner : 0;
+                this.showGameOverModal(winner);
                 break;
 
             case 'WORD_FOUND':
@@ -1575,10 +1985,18 @@ class FindWordsGame {
                     this.updatePlayerStats();
                 }
                 
-                // Check if level is complete (combined from both players)
-                if (data.levelComplete) {
-                    this.checkWinCondition();
+                // Check if current player has completed their level
+                // Each player advances independently
+                this.checkWinCondition();
+                break;
+
+            case 'PLAYER_LEVEL_COMPLETE':
+                // Another player completed their level - just update scores
+                if (data.playerScores) {
+                    this.playerScores = data.playerScores;
+                    this.updatePlayerStats();
                 }
+                // Note: Each player advances independently, so we don't need to do anything else
                 break;
 
             case 'NEW_GAME_STARTED':
@@ -1603,7 +2021,12 @@ class FindWordsGame {
                 break;
 
             case 'ERROR':
-                alert('Error: ' + data.message);
+                // Only show alert for important errors, not for unknown message types
+                if (data.message && !data.message.includes('Unknown message type')) {
+                    alert('Error: ' + data.message);
+                } else {
+                    console.warn('Server error:', data.message);
+                }
                 break;
 
             case 'HOST_CHANGED':
@@ -1611,6 +2034,12 @@ class FindWordsGame {
                     this.isHost = true;
                     alert('You are now the host');
                 }
+                break;
+
+            default:
+                // Handle unknown message types gracefully
+                console.warn('Unknown message type received:', data.type, data);
+                // Don't show alert for unknown types - just log it
                 break;
         }
     }
@@ -1623,19 +2052,36 @@ class FindWordsGame {
         
         const createRoomAction = () => {
             this.playerId = this.playerId || `player_${Date.now()}_${Math.random()}`;
-            this.sendWebSocketMessage({
+            console.log('Creating room with playerId:', this.playerId);
+            const message = {
                 type: 'CREATE_ROOM',
                 playerId: this.playerId,
                 playerName: 'Player 1'
-            });
+            };
+            console.log('Sending CREATE_ROOM message:', message);
+            this.sendWebSocketMessage(message);
         };
 
-        if (!this.wsConnected) {
+        // Check WebSocket connection state
+        if (!this.ws) {
+            // No WebSocket object - connect first
+            console.log('No WebSocket connection, connecting...');
             this.connectWebSocket();
-            // Queue the action to execute when connection opens
             this.pendingActions.push(createRoomAction);
-        } else {
+        } else if (this.ws.readyState === WebSocket.CONNECTING) {
+            // Connection in progress - queue the action
+            console.log('WebSocket connecting, queuing create room action...');
+            this.pendingActions.push(createRoomAction);
+        } else if (this.ws.readyState === WebSocket.OPEN && this.wsConnected) {
+            // Connected - execute immediately
+            console.log('WebSocket connected, creating room...');
             createRoomAction();
+        } else {
+            // Connection closed or error - try to reconnect
+            console.log('WebSocket not open, reconnecting...');
+            this.wsConnected = false;
+            this.connectWebSocket();
+            this.pendingActions.push(createRoomAction);
         }
     }
 
@@ -1665,19 +2111,125 @@ class FindWordsGame {
     }
 
     leaveRoom() {
+        // Close/leave the room
+        console.log('Leaving room...');
         this.disconnectWebSocket();
         document.getElementById('roomCodeInput').value = '';
-        // Reset level
+        
+        // Hide room info
+        const roomInfo = document.getElementById('roomInfo');
+        if (roomInfo) {
+            roomInfo.classList.add('hidden');
+        }
+        
+        // Reset game state
         this.currentLevel = 1;
         this.playerScores = { 1: 0, 2: 0 };
         this.playerFoundWords = { 1: new Set(), 2: new Set() };
-        // Don't start new game - wait for room creation
+        this.playerLevels = { 1: 1, 2: 1 }; // Reset player levels
+        this.roomCode = null;
+        this.isHost = false;
+        this.playerNumber = null;
+        
+        // Hide score display
+        const playerScoresDisplay = document.getElementById('playerScoresDisplay');
+        if (playerScoresDisplay) {
+            playerScoresDisplay.classList.add('hidden');
+        }
+        
+        // Reset connection status
+        this.updateConnectionStatus('disconnected', 'Disconnected');
+        
+        // Clear grid and reset UI
+        const grid = document.getElementById('grid');
+        if (grid) {
+            grid.innerHTML = '';
+            grid.classList.add('blurred');
+        }
+        
+        const wordsList = document.getElementById('wordsList');
+        if (wordsList) {
+            wordsList.innerHTML = '';
+        }
+        
+        // Hide words section
+        this.hideWordsSection();
+        
+        // Show start overlay
+        this.showStartOverlay();
+        
+        console.log('Room left successfully');
+    }
+    
+    /**
+     * Reset game for a new round (Play Again)
+     */
+    resetGameForNewRound() {
+        console.log('Resetting game for new round...');
+        
+        // Hide words section
+        this.hideWordsSection();
+        
+        // Reset game state
+        this.currentLevel = 1;
+        this.playerScores = { 1: 0, 2: 0 };
+        this.playerFoundWords = { 1: new Set(), 2: new Set() };
+        this.playerLevels = { 1: 1, 2: 1 }; // Reset player levels
+        this.foundWords.clear();
+        this.totalGameTime = 0;
+        this.levelStartTime = null;
+        
+        // Clear timers
+        if (this.levelTimerInterval) {
+            clearInterval(this.levelTimerInterval);
+        }
+        if (this.timerInterval) {
+            clearInterval(this.timerInterval);
+        }
+        
+        // Reset timer display
+        document.getElementById('timer').textContent = '00:00';
+        
+        // If host, automatically trigger New Game
+        if (this.isHost && this.wsConnected) {
+            console.log('Host: Starting new game...');
+            // Small delay to ensure modal is closed
+            setTimeout(() => {
+                this.newGame();
+            }, 300);
+        } else if (!this.isHost) {
+            // Non-host waits for host to start
+            console.log('Waiting for host to start new game...');
+            this.showStartOverlay();
+        } else {
+            // Not connected - just reset UI
+            this.newGame();
+        }
     }
 
     updateRoomUI() {
-        document.getElementById('roomCodeDisplay').textContent = this.roomCode;
-        document.getElementById('roomInfo').classList.remove('hidden');
-        document.getElementById('roomCodeInput').value = '';
+        console.log('updateRoomUI called with roomCode:', this.roomCode);
+        const roomCodeDisplay = document.getElementById('roomCodeDisplay');
+        const roomInfo = document.getElementById('roomInfo');
+        
+        if (roomCodeDisplay) {
+            roomCodeDisplay.textContent = this.roomCode || '-';
+            console.log('Room code displayed:', this.roomCode);
+        } else {
+            console.error('roomCodeDisplay element not found!');
+        }
+        
+        if (roomInfo) {
+            roomInfo.classList.remove('hidden');
+        } else {
+            console.error('roomInfo element not found!');
+        }
+        
+        const roomCodeInput = document.getElementById('roomCodeInput');
+        if (roomCodeInput) {
+            roomCodeInput.value = '';
+        }
+        
         this.updatePlayersCount(this.playerNumber === 1 ? 1 : 2);
     }
 
