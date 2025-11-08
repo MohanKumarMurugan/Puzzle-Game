@@ -2234,7 +2234,22 @@ class FindWordsGame {
     }
 
     updatePlayersCount(count) {
-        document.getElementById('playersCount').textContent = `${count}/2`;
+        const playersCountEl = document.getElementById('playersCount');
+        if (playersCountEl) playersCountEl.textContent = `${count}/2`;
+
+        // Disable Start button for non-hosts or until there are 2 players
+        try {
+            const startBtn = document.getElementById('startBtn');
+            if (startBtn) {
+                const shouldEnable = this.isHost && count >= 2;
+                startBtn.disabled = !shouldEnable;
+                // Add subtle visual cue
+                if (shouldEnable) startBtn.classList.remove('disabled'); else startBtn.classList.add('disabled');
+                console.log('Start button', shouldEnable ? 'enabled' : 'disabled', '(isHost=', this.isHost, ', players=', count, ')');
+            }
+        } catch (e) {
+            console.warn('Could not update Start button state:', e);
+        }
     }
 
     syncGameState(gameState) {
