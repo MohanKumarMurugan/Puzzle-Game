@@ -173,6 +173,10 @@ wss.on('connection', (ws, req) => {
             case 'LEVEL_COMPLETE':
                 // Client notifies server of level completion (handled in handleWordFound)
                 break;
+            case 'PLAYER_LEVEL_COMPLETE':
+                // Player completed their level independently
+                handlePlayerLevelComplete(ws, data);
+                break;
             case 'GAME_OVER':
                 // Client notifies server of game over (handled in handleWordFound or handleLevelTimeUp)
                 break;
@@ -646,28 +650,41 @@ wss.on('connection', (ws, req) => {
         console.log(`Level ${completedLevel} completed in room ${room.roomCode}, advancing to level ${nextLevel}`);
     }
 
+    function handlePlayerLevelComplete(ws, data) {
+        if (!currentRoom) {
+            sendError(ws, 'Not in a room');
+            return;
+        }
+
+        const { playerNumber, completedLevel, nextLevel, playerScores } = data;
+        
+        // Update player scores
+        if (playerScores) {
+            currentRoom.gameState.playerScores = playerScores;
+        }
+        
+        // Broadcast player level completion to all players (for score updates)
+        // Note: Each player advances independently, so we just update scores
+        currentRoom.broadcast({
+            type: 'PLAYER_LEVEL_COMPLETE',
+            playerNumber: playerNumber,
+            completedLevel: completedLevel,
+            nextLevel: nextLevel,
+            playerScores: currentRoom.gameState.playerScores
+        });
+        
+        console.log(`Player ${playerNumber} completed level ${completedLevel} in room ${currentRoom.roomCode}, advancing to level ${nextLevel}`);
+    }
+
     function handleLevelTimeUp(room) {
         // Clear timer
         if (room.levelTimer) {
             clearTimeout(room.levelTimer);
         }
         
-        const currentLevel = room.gameState.currentLevel || 1;
-        
-        // Broadcast time up message to all players
-        room.broadcast({
-            type: 'TIME_UP',
-            currentLevel: currentLevel,
-            playerScores: room.gameState.playerScores
-        });
-        
-        if (currentLevel < 3) {
-            // Move to next level
-            handleLevelComplete(room, currentLevel);
-        } else {
-            // Game over - all levels completed
-            handleGameOver(room);
-        }
+        // Timer ended - immediately end the game for all players
+        // Don't advance to next level, game is over
+        handleGameOver(room);
     }
 
     function handleGameOver(room) {
