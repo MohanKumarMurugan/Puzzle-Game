@@ -1,0 +1,182 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Find the Words Game</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Find the Words</h1>
+            <div class="game-controls">
+                <div class="player-mode-selector">
+                    <button id="multiplayerMode" class="player-mode-btn active">Multiplayer (Online)</button>
+                </div>
+                <!-- Multiplayer Connection Panel -->
+                <div id="multiplayerPanel" class="multiplayer-panel hidden">
+                    <div class="connection-status" id="connectionStatus">
+                        <span id="statusIndicator" class="status-indicator">⚫</span>
+                        <span id="statusText">Disconnected</span>
+                    </div>
+                    <div class="room-controls">
+                        <button id="createRoomBtn" class="room-btn">Create Room</button>
+                        <div class="room-join">
+                            <input type="text" id="roomCodeInput" placeholder="Enter Room Code" maxlength="6">
+                            <button id="joinRoomBtn" class="room-btn">Join Room</button>
+                        </div>
+                        <div id="roomInfo" class="room-info hidden">
+                            <p>Room Code: <strong id="roomCodeDisplay">-</strong></p>
+                            <p>Players: <span id="playersCount">1/2</span></p>
+                            <button id="leaveRoomBtn" class="room-btn leave-btn">Leave Room</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="mode-selector multiplayer-hidden">
+                    <button id="randomMode" class="mode-btn active">Random Mode</button>
+                    <button id="customMode" class="mode-btn">Custom Mode</button>
+                </div>
+                <div class="difficulty-selector multiplayer-hidden" id="difficultySelector">
+                    <label for="difficulty">Difficulty:</label>
+                    <select id="difficulty">
+                        <option value="easy">Easy</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="hard">Hard</option>
+                    </select>
+                </div>
+                <div class="grid-size-selector multiplayer-hidden">
+                    <label for="gridSize">Grid Size:</label>
+                    <select id="gridSize">
+                        <option value="10">10x10</option>
+                        <option value="12">12x12</option>
+                        <option value="15" selected>15x15</option>
+                        <option value="18">18x18</option>
+                        <option value="20">20x20</option>
+                    </select>
+                </div>
+                <button id="newGame" class="new-game-btn">New Game</button>
+                <button id="hintBtn" class="hint-btn multiplayer-hidden">💡 Hint</button>
+            </div>
+        </header>
+
+        <main class="game-area">
+            <!-- Custom Mode Panel -->
+            <div id="customPanel" class="custom-panel hidden">
+                <h3>Custom Words</h3>
+                <div class="custom-input">
+                    <input type="text" id="wordInput" placeholder="Enter a word and press Enter">
+                    <button id="addWord">Add Word</button>
+                </div>
+                <div class="custom-words-list">
+                    <h4>Your Words:</h4>
+                    <ul id="customWordsList"></ul>
+                    <button id="clearWords" class="clear-btn">Clear All</button>
+                </div>
+            </div>
+
+            <!-- Game Board -->
+            <div class="game-board">
+                <!-- Player Scores Display (Multiplayer) -->
+                <div id="playerScoresDisplay" class="player-scores-display hidden">
+                    <div class="player-score-item">
+                        <span class="player-label">Player 1:</span>
+                        <span class="player-points" id="player1PointsDisplay">0</span>
+                        <span class="points-label">Points</span>
+                    </div>
+                    <div class="player-score-item">
+                        <span class="player-label">Player 2:</span>
+                        <span class="player-points" id="player2PointsDisplay">0</span>
+                        <span class="points-label">Points</span>
+                    </div>
+                </div>
+                <div class="game-content-wrapper">
+                    <div class="grid-container">
+                        <div id="grid" class="grid blurred"></div>
+                        <!-- <div id="timerOverlay" class="timer-overlay">
+                            <div id="gameTimer" class="game-timer">00:00</div>
+                        </div> -->
+                        <div id="startOverlay" class="start-overlay">
+                            <button id="startBtn" class="start-btn">🚀 Start Game</button>
+                        </div>
+                    </div>
+                    
+                    <div class="game-sidebar">
+                    <!-- Player Stats (2-Player Mode) -->
+                    <div id="playerStats" class="player-stats hidden">
+                        <div class="player-stat player-1">
+                            <div class="player-header">
+                                <h3>Player 1</h3>
+                                <span id="player1Indicator" class="turn-indicator">👤</span>
+                            </div>
+                            <div class="player-score">
+                                <span class="score-label">Score:</span>
+                                <span id="player1Score">0</span>
+                            </div>
+                        </div>
+                        <div class="player-stat player-2">
+                            <div class="player-header">
+                                <h3>Player 2</h3>
+                                <span id="player2Indicator" class="turn-indicator">👤</span>
+                            </div>
+                            <div class="player-score">
+                                <span class="score-label">Score:</span>
+                                <span id="player2Score">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="words-to-find">
+                        <h3>Words to Find</h3>
+                        <ul id="wordsList" class="words-list"></ul>
+                    </div>
+                    
+                    <div class="game-stats">
+                        <div class="stat">
+                            <span class="stat-label">Found:</span>
+                            <span id="foundCount">0</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Total:</span>
+                            <span id="totalCount">0</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Time:</span>
+                            <span id="timer">00:00</span>
+                        </div>
+                    </div>
+
+                    <div class="selection-info">
+                        <h4>Current Selection:</h4>
+                        <span id="currentSelection">-</span>
+                    </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Win Modal -->
+        <div id="winModal" class="modal hidden">
+            <div class="modal-content">
+                <h2 id="winTitle">Congratulations!</h2>
+                <p id="winMessage">You found all the words!</p>
+                <div id="winStats">
+                    <p>Time: <span id="finalTime"></span></p>
+                </div>
+                <div id="playerWinStats" class="hidden">
+                    <div class="player-win-stat">
+                        <h4>Player 1 Score: <span id="finalPlayer1Score">0</span></h4>
+                    </div>
+                    <div class="player-win-stat">
+                        <h4>Player 2 Score: <span id="finalPlayer2Score">0</span></h4>
+                    </div>
+                </div>
+                <button id="playAgain" class="play-again-btn">Play Again</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

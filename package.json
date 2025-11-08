@@ -1,0 +1,25 @@
+{
+  "name": "find-words-multiplayer",
+  "version": "1.0.0",
+  "description": "Multiplayer Find Words Game with WebSocket support",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": [
+    "game",
+    "multiplayer",
+    "websocket",
+    "word-search"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
+

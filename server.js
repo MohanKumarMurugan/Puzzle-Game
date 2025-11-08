@@ -1,0 +1,608 @@
+/**
+ * WebSocket Server for Find Words Multiplayer Game
+ * Handles real-time game synchronization between multiple players
+ */
+
+const WebSocket = require('ws');
+const http = require('http');
+
+const server = http.createServer();
+const wss = new WebSocket.Server({ server });
+
+// Game rooms storage
+const rooms = new Map();
+
+// Generate unique room code
+function generateRoomCode() {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+// Game state structure
+class GameRoom {
+    constructor(roomCode, hostId) {
+        this.roomCode = roomCode;
+        this.hostId = hostId;
+        this.players = new Map(); // playerId -> { ws, playerNumber, name }
+        this.gameState = {
+            grid: [],
+            words: [],
+            foundWords: new Set(),
+            playerScores: { 1: 0, 2: 0 },
+            playerFoundWords: { 1: new Set(), 2: new Set() },
+            currentPlayer: 1,
+            gameStarted: false,
+            gridSize: 15,
+            mode: 'random',
+            difficulty: 'medium',
+            customWords: []
+        };
+        this.gameConfig = null; // Stores game configuration
+    }
+
+    addPlayer(playerId, ws, playerName) {
+        if (this.players.size >= 2) {
+            return false; // Room is full
+        }
+        
+        const playerNumber = this.players.size + 1;
+        this.players.set(playerId, {
+            ws,
+            playerNumber,
+            name: playerName || `Player ${playerNumber}`
+        });
+        
+        return true;
+    }
+
+    removePlayer(playerId) {
+        this.players.delete(playerId);
+    }
+
+    broadcast(message, excludePlayerId = null) {
+        const data = JSON.stringify(message);
+        this.players.forEach((player, id) => {
+            if (id !== excludePlayerId && player.ws.readyState === WebSocket.OPEN) {
+                player.ws.send(data);
+            }
+        });
+    }
+
+    getPlayerNumber(playerId) {
+        const player = this.players.get(playerId);
+        return player ? player.playerNumber : null;
+    }
+}
+
+// Handle WebSocket connections
+wss.on('connection', (ws, req) => {
+    let playerId = null;
+    let currentRoom = null;
+
+    ws.on('message', (message) => {
+        try {
+            const rawMessage = message.toString();
+            console.log('Raw message received:', rawMessage.substring(0, 200)); // Log first 200 chars
+            const data = JSON.parse(rawMessage);
+            console.log('Parsed message type:', data.type);
+            handleMessage(ws, data);
+        } catch (error) {
+            console.error('Error parsing message:', error);
+            console.error('Message that failed:', message.toString().substring(0, 500));
+            sendError(ws, 'Invalid message format: ' + error.message);
+        }
+    });
+
+    ws.on('close', () => {
+        if (playerId && currentRoom) {
+            handlePlayerDisconnect(currentRoom, playerId);
+        }
+    });
+
+    ws.on('error', (error) => {
+        console.error('WebSocket error:', error);
+    });
+
+    function handleMessage(ws, data) {
+        switch (data.type) {
+            case 'CREATE_ROOM':
+                handleCreateRoom(ws, data);
+                break;
+            case 'JOIN_ROOM':
+                handleJoinRoom(ws, data);
+                break;
+            case 'GAME_CONFIG':
+                handleGameConfig(ws, data);
+                break;
+            case 'START_GAME':
+                handleStartGame(ws, data);
+                break;
+            case 'WORD_FOUND':
+                handleWordFound(ws, data);
+                break;
+            case 'NEW_GAME':
+                handleNewGame(ws, data);
+                break;
+            case 'PLAYER_ACTION':
+                handlePlayerAction(ws, data);
+                break;
+            case 'LEVEL_COMPLETE':
+                // Client notifies server of level completion (handled in handleWordFound)
+                break;
+            case 'GAME_OVER':
+                // Client notifies server of game over (handled in handleWordFound or handleLevelTimeUp)
+                break;
+            default:
+                sendError(ws, 'Unknown message type');
+        }
+    }
+
+    function handleCreateRoom(ws, data) {
+        const roomCode = generateRoomCode();
+        playerId = data.playerId || `player_${Date.now()}_${Math.random()}`;
+        const room = new GameRoom(roomCode, playerId);
+        
+        room.addPlayer(playerId, ws, data.playerName);
+        rooms.set(roomCode, room);
+        currentRoom = room;
+
+        ws.send(JSON.stringify({
+            type: 'ROOM_CREATED',
+            roomCode,
+            playerId,
+            playerNumber: 1
+        }));
+
+        console.log(`Room ${roomCode} created by player ${playerId}`);
+    }
+
+    function handleJoinRoom(ws, data) {
+        const { roomCode } = data;
+        if (!roomCode) {
+            sendError(ws, 'Room code is required');
+            return;
+        }
+        // Normalize room code to uppercase for case-insensitive matching
+        const normalizedRoomCode = roomCode.toUpperCase();
+        const room = rooms.get(normalizedRoomCode);
+
+        if (!room) {
+            sendError(ws, 'Room not found');
+            return;
+        }
+
+        if (room.players.size >= 2) {
+            sendError(ws, 'Room is full');
+            return;
+        }
+
+        playerId = data.playerId || `player_${Date.now()}_${Math.random()}`;
+        const added = room.addPlayer(playerId, ws, data.playerName);
+        
+        if (!added) {
+            sendError(ws, 'Failed to join room');
+            return;
+        }
+
+        currentRoom = room;
+        const playerNumber = room.getPlayerNumber(playerId);
+
+        // Convert Sets to Arrays for JSON serialization
+        const gameStateForClient = room.gameState.gameStarted ? {
+            ...room.gameState,
+            foundWords: Array.from(room.gameState.foundWords),
+            playerFoundWords: {
+                1: Array.from(room.gameState.playerFoundWords[1]),
+                2: Array.from(room.gameState.playerFoundWords[2])
+            }
+        } : null;
+
+        // Send join confirmation to new player
+        ws.send(JSON.stringify({
+            type: 'ROOM_JOINED',
+            roomCode: normalizedRoomCode,
+            playerId,
+            playerNumber,
+            gameState: gameStateForClient,
+            gameConfig: room.gameConfig
+        }));
+
+        // Notify other players
+        room.broadcast({
+            type: 'PLAYER_JOINED',
+            playerId,
+            playerNumber,
+            playerName: data.playerName || `Player ${playerNumber}`
+        }, playerId);
+
+        console.log(`Player ${playerId} joined room ${normalizedRoomCode} as player ${playerNumber}`);
+    }
+
+    function handleGameConfig(ws, data) {
+        if (!currentRoom || currentRoom.hostId !== playerId) {
+            sendError(ws, 'Only the host can configure the game');
+            return;
+        }
+
+        currentRoom.gameConfig = data.config;
+        currentRoom.broadcast({
+            type: 'GAME_CONFIG_UPDATED',
+            config: data.config
+        }, playerId);
+
+        ws.send(JSON.stringify({
+            type: 'GAME_CONFIG_SAVED',
+            config: data.config
+        }));
+    }
+
+    function handleStartGame(ws, data) {
+        if (!currentRoom || currentRoom.hostId !== playerId) {
+            sendError(ws, 'Only the host can start the game');
+            return;
+        }
+
+        if (currentRoom.players.size < 2) {
+            sendError(ws, 'Need at least 2 players to start');
+            return;
+        }
+
+        // Debug logging - log the raw data structure
+        console.log('=== handleStartGame DEBUG ===');
+        console.log('Received data type:', typeof data);
+        console.log('Received data keys:', Object.keys(data || {}));
+        console.log('data.gameState exists?', !!data.gameState);
+        if (data.gameState) {
+            console.log('gameState keys:', Object.keys(data.gameState));
+            console.log('gameState.words exists?', !!data.gameState.words);
+            console.log('gameState.words type:', typeof data.gameState.words);
+            console.log('gameState.words is array?', Array.isArray(data.gameState.words));
+            if (data.gameState.words) {
+                console.log('gameState.words length:', data.gameState.words.length);
+                console.log('gameState.words content:', data.gameState.words);
+            }
+        }
+        console.log('Full data object:', JSON.stringify(data, null, 2));
+        console.log('=== END DEBUG ===');
+        
+        if (!data) {
+            console.error('data is null or undefined');
+            sendError(ws, 'Invalid game state data: no data received');
+            return;
+        }
+        
+        if (!data.gameState) {
+            console.error('gameState is missing from data. Data structure:', Object.keys(data));
+            sendError(ws, 'Invalid game state data: gameState is missing. Received keys: ' + Object.keys(data).join(', '));
+            return;
+        }
+        
+        if (!data.gameState.words) {
+            console.error('words is missing from gameState. gameState keys:', Object.keys(data.gameState));
+            sendError(ws, 'Invalid game state data: words is missing from gameState');
+            return;
+        }
+        
+        if (!Array.isArray(data.gameState.words)) {
+            console.error('words is not an array. Type:', typeof data.gameState.words, 'Value:', data.gameState.words);
+            sendError(ws, 'Invalid game state data: words is not an array (type: ' + typeof data.gameState.words + ')');
+            return;
+        }
+        
+        if (data.gameState.words.length === 0) {
+            console.error('words array is empty');
+            sendError(ws, 'Invalid game state data: words array is empty. Please click "New Game" first!');
+            return;
+        }
+        
+        console.log('✓ Validation passed. Words array has', data.gameState.words.length, 'items');
+
+        // Initialize game state from config (store words and config, but NOT the grid)
+        // Each player will generate their own puzzle with the same word list
+        const currentLevel = data.gameState.currentLevel || 1;
+        currentRoom.gameState = {
+            words: data.gameState.words, // Same words for all players
+            foundWords: new Set(),
+            playerScores: data.gameState.playerScores || { 1: 0, 2: 0 }, // Keep scores across levels
+            playerFoundWords: { 1: new Set(), 2: new Set() },
+            currentPlayer: 1,
+            gameStarted: true,
+            gridSize: data.gameState.gridSize || 15,
+            mode: data.gameState.mode || 'random',
+            difficulty: data.gameState.difficulty || 'medium',
+            customWords: data.gameState.customWords || [],
+            currentLevel: currentLevel
+        };
+        
+        // Set synchronized timer start time
+        const levelStartTime = Date.now();
+        currentRoom.levelStartTime = levelStartTime;
+        currentRoom.levelTimer = setTimeout(() => {
+            handleLevelTimeUp(currentRoom);
+        }, 120000); // 2 minutes = 120000ms
+        
+        // Send game config to each player individually (they will generate their own puzzles)
+        // This ensures each player gets a different puzzle layout
+        // IMPORTANT: Send to ALL players including the host
+        const playersList = Array.from(currentRoom.players.entries());
+        console.log(`Sending GAME_STARTED to ${playersList.length} players (including host)`);
+        
+        playersList.forEach(([id, player]) => {
+            const gameConfig = {
+                words: data.gameState.words,
+                gridSize: data.gameState.gridSize || 15,
+                mode: data.gameState.mode || 'random',
+                difficulty: data.gameState.difficulty || 'medium',
+                customWords: data.gameState.customWords || [],
+                currentLevel: currentLevel,
+                playerScores: data.gameState.playerScores || { 1: 0, 2: 0 },
+                foundWords: [],
+                playerFoundWords: { 1: [], 2: [] },
+                currentPlayer: 1,
+                gameStarted: true
+            };
+
+            if (player.ws.readyState === WebSocket.OPEN) {
+                const message = {
+                    type: 'GAME_STARTED',
+                    gameConfig: gameConfig, // Send config instead of full game state
+                    levelStartTime: levelStartTime,
+                    currentLevel: currentLevel
+                };
+                
+                console.log(`✓ Sending GAME_STARTED to player ${id} (Player ${player.playerNumber}, Host: ${id === currentRoom.hostId})`);
+                try {
+                    player.ws.send(JSON.stringify(message));
+                    console.log(`  ✓ Message sent successfully to Player ${player.playerNumber}`);
+                } catch (error) {
+                    console.error(`  ✗ Error sending to Player ${player.playerNumber}:`, error);
+                }
+            } else {
+                console.error(`✗ Player ${id} (Player ${player.playerNumber}) WebSocket not open. State: ${player.ws.readyState}`);
+            }
+        });
+
+        console.log(`Game started in room ${currentRoom.roomCode}, Level ${currentLevel} - Each player will generate their own puzzle`);
+    }
+
+    function handleWordFound(ws, data) {
+        if (!currentRoom) {
+            sendError(ws, 'Not in a room');
+            return;
+        }
+
+        const playerNumber = currentRoom.getPlayerNumber(playerId);
+        if (!playerNumber) {
+            sendError(ws, 'Player not found in room');
+            return;
+        }
+
+        // Validate word finding
+        if (typeof data.wordIndex === 'undefined' || !Array.isArray(data.cells)) {
+            sendError(ws, 'Invalid word found data');
+            return;
+        }
+
+        const { wordIndex, cells } = data;
+        const gameState = currentRoom.gameState;
+
+        // Check if this player has already found this word (prevent duplicate scoring)
+        if (gameState.playerFoundWords[playerNumber].has(wordIndex)) {
+            return; // Player already found this word, ignore
+        }
+
+        // Update game state - both players can find the same word and get points
+        gameState.playerFoundWords[playerNumber].add(wordIndex);
+        gameState.playerScores[playerNumber]++;
+        
+        // Add to global foundWords set if not already there (for level completion tracking)
+        // Level completes when all unique words have been found by at least one player
+        if (!gameState.foundWords.has(wordIndex)) {
+            gameState.foundWords.add(wordIndex);
+        }
+
+        // Mark cells as found (for reference, but each player has their own grid)
+        cells.forEach(({ row, col }) => {
+            if (gameState.grid[row] && gameState.grid[row][col]) {
+                gameState.grid[row][col].found = true;
+            }
+        });
+
+        // No turn switching - both players play simultaneously
+        // currentPlayer is kept for compatibility but not used for turn restrictions
+
+        // Check level completion (all unique words found by at least one player)
+        const allWordsFound = gameState.foundWords.size === gameState.words.length;
+        
+        // Broadcast word found to all players
+        // Note: Each player has their own puzzle, so cells array is for reference only
+        currentRoom.broadcast({
+            type: 'WORD_FOUND',
+            playerId,
+            playerNumber,
+            wordIndex,
+            cells,
+            playerScores: gameState.playerScores,
+            foundWordsCount: gameState.foundWords.size,
+            totalWords: gameState.words.length,
+            levelComplete: allWordsFound
+        });
+
+        // If level completed, advance to next level or end game
+        if (allWordsFound) {
+            const currentLevel = gameState.currentLevel || 1;
+            if (currentLevel < 3) {
+                // Advance to next level
+                handleLevelComplete(currentRoom, currentLevel);
+            } else {
+                // All levels completed - end game
+                handleGameOver(currentRoom);
+            }
+        }
+    }
+
+    function handleNewGame(ws, data) {
+        if (!currentRoom || currentRoom.hostId !== playerId) {
+            sendError(ws, 'Only the host can start a new game');
+            return;
+        }
+
+        if (!data.gameState || !data.gameState.grid || !data.gameState.words) {
+            sendError(ws, 'Invalid game state data');
+            return;
+        }
+
+        // Reset game state
+        currentRoom.gameState = {
+            grid: data.gameState.grid,
+            words: data.gameState.words,
+            foundWords: new Set(),
+            playerScores: { 1: 0, 2: 0 },
+            playerFoundWords: { 1: new Set(), 2: new Set() },
+            currentPlayer: 1,
+            gameStarted: false,
+            gridSize: data.gameState.gridSize || 15,
+            mode: data.gameState.mode || 'random',
+            difficulty: data.gameState.difficulty || 'medium',
+            customWords: data.gameState.customWords || []
+        };
+
+        // Convert Sets to Arrays for broadcasting
+        const newGameStateForBroadcast = {
+            ...currentRoom.gameState,
+            foundWords: Array.from(currentRoom.gameState.foundWords),
+            playerFoundWords: {
+                1: Array.from(currentRoom.gameState.playerFoundWords[1]),
+                2: Array.from(currentRoom.gameState.playerFoundWords[2])
+            }
+        };
+
+        currentRoom.broadcast({
+            type: 'NEW_GAME_STARTED',
+            gameState: newGameStateForBroadcast
+        });
+    }
+
+    function handlePlayerAction(ws, data) {
+        if (!currentRoom) return;
+
+        // Broadcast player actions (like selection) to other players
+        currentRoom.broadcast({
+            type: 'PLAYER_ACTION',
+            playerId,
+            playerNumber: currentRoom.getPlayerNumber(playerId),
+            action: data.action
+        }, playerId);
+    }
+
+    function handlePlayerDisconnect(room, disconnectedPlayerId) {
+        const player = room.players.get(disconnectedPlayerId);
+        if (player) {
+            room.removePlayer(disconnectedPlayerId);
+            
+            // Notify other players
+            room.broadcast({
+                type: 'PLAYER_DISCONNECTED',
+                playerId: disconnectedPlayerId,
+                playerNumber: player.playerNumber
+            });
+
+            // If host disconnected, close room or transfer host
+            if (room.hostId === disconnectedPlayerId && room.players.size > 0) {
+                // Transfer host to first remaining player
+                const remainingPlayers = Array.from(room.players.keys());
+                room.hostId = remainingPlayers[0];
+                room.broadcast({
+                    type: 'HOST_CHANGED',
+                    newHostId: room.hostId
+                });
+            }
+
+            // Clean up empty rooms
+            if (room.players.size === 0) {
+                rooms.delete(room.roomCode);
+                console.log(`Room ${room.roomCode} closed (empty)`);
+            }
+
+            console.log(`Player ${disconnectedPlayerId} disconnected from room ${room.roomCode}`);
+        }
+    }
+
+    function handleLevelComplete(room, completedLevel) {
+        // Clear timer
+        if (room.levelTimer) {
+            clearTimeout(room.levelTimer);
+        }
+        
+        const nextLevel = completedLevel + 1;
+        
+        // Broadcast level completion
+        room.broadcast({
+            type: 'LEVEL_COMPLETE',
+            currentLevel: completedLevel,
+            nextLevel: nextLevel,
+            playerScores: room.gameState.playerScores
+        });
+        
+        console.log(`Level ${completedLevel} completed in room ${room.roomCode}, advancing to level ${nextLevel}`);
+    }
+
+    function handleLevelTimeUp(room) {
+        // Clear timer
+        if (room.levelTimer) {
+            clearTimeout(room.levelTimer);
+        }
+        
+        const currentLevel = room.gameState.currentLevel || 1;
+        
+        if (currentLevel < 3) {
+            // Move to next level
+            handleLevelComplete(room, currentLevel);
+        } else {
+            // Game over - all levels completed
+            handleGameOver(room);
+        }
+    }
+
+    function handleGameOver(room) {
+        // Clear timer
+        if (room.levelTimer) {
+            clearTimeout(room.levelTimer);
+        }
+        
+        // Determine winner
+        const player1Score = room.gameState.playerScores[1];
+        const player2Score = room.gameState.playerScores[2];
+        
+        let winner = 0; // 0 = tie, 1 = player 1, 2 = player 2
+        if (player1Score > player2Score) {
+            winner = 1;
+        } else if (player2Score > player1Score) {
+            winner = 2;
+        }
+        
+        // Broadcast game over
+        room.broadcast({
+            type: 'GAME_OVER',
+            playerScores: room.gameState.playerScores,
+            winner: winner
+        });
+        
+        console.log(`Game over in room ${room.roomCode}. Winner: Player ${winner || 'Tie'}`);
+    }
+
+    function sendError(ws, message) {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'ERROR',
+                message
+            }));
+        }
+    }
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`WebSocket server running on port ${PORT}`);
+    console.log(`Connect to: ws://localhost:${PORT}`);
+});
+
