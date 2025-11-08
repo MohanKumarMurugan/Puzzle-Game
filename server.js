@@ -137,22 +137,43 @@ wss.on('connection', (ws, req) => {
     }
 
     function handleCreateRoom(ws, data) {
+        console.log('=== handleCreateRoom called ===');
+        console.log('Received data:', data);
+        
         const roomCode = generateRoomCode();
+        console.log('Generated room code:', roomCode);
+        
         playerId = data.playerId || `player_${Date.now()}_${Math.random()}`;
+        console.log('Using playerId:', playerId);
+        
         const room = new GameRoom(roomCode, playerId);
         
-        room.addPlayer(playerId, ws, data.playerName);
+        const added = room.addPlayer(playerId, ws, data.playerName);
+        if (!added) {
+            console.error('Failed to add player to room');
+            sendError(ws, 'Failed to create room - room is full');
+            return;
+        }
+        
         rooms.set(roomCode, room);
         currentRoom = room;
 
-        ws.send(JSON.stringify({
+        const response = {
             type: 'ROOM_CREATED',
-            roomCode,
-            playerId,
+            roomCode: roomCode,
+            playerId: playerId,
             playerNumber: 1
-        }));
-
-        console.log(`Room ${roomCode} created by player ${playerId}`);
+        };
+        
+        console.log('Sending ROOM_CREATED response:', response);
+        
+        try {
+            ws.send(JSON.stringify(response));
+            console.log(`✓ Room ${roomCode} created successfully by player ${playerId}`);
+        } catch (error) {
+            console.error('✗ Error sending ROOM_CREATED:', error);
+            sendError(ws, 'Error creating room: ' + error.message);
+        }
     }
 
     function handleJoinRoom(ws, data) {
@@ -308,12 +329,25 @@ wss.on('connection', (ws, req) => {
             currentLevel: currentLevel
         };
         
-        // Set synchronized timer start time
-        const levelStartTime = Date.now();
-        currentRoom.levelStartTime = levelStartTime;
-        currentRoom.levelTimer = setTimeout(() => {
-            handleLevelTimeUp(currentRoom);
-        }, 120000); // 2 minutes = 120000ms
+        // Set synchronized timer start time (only on first level, continue for subsequent levels)
+        if (!currentRoom.levelStartTime || currentLevel === 1) {
+            // First level or reset - start the timer
+            const levelStartTime = Date.now();
+            currentRoom.levelStartTime = levelStartTime;
+            // Clear existing timer if any
+            if (currentRoom.levelTimer) {
+                clearTimeout(currentRoom.levelTimer);
+            }
+            currentRoom.levelTimer = setTimeout(() => {
+                handleLevelTimeUp(currentRoom);
+            }, 120000); // 2 minutes = 120000ms total for all levels
+            console.log('Timer started for level', currentLevel);
+        } else {
+            // Subsequent level - timer continues, don't reset
+            console.log('Timer continuing for level', currentLevel, '(cumulative, started at', new Date(currentRoom.levelStartTime).toLocaleTimeString(), ')');
+        }
+        
+        const levelStartTime = currentRoom.levelStartTime || Date.now();
         
         // Send game config to each player (including the grid so both players see the same puzzle)
         // IMPORTANT: Send to ALL players including the host
@@ -340,7 +374,7 @@ wss.on('connection', (ws, req) => {
                 const message = {
                     type: 'GAME_STARTED',
                     gameConfig: gameConfig, // Send config with grid so both players see the same puzzle
-                    levelStartTime: levelStartTime,
+                    levelStartTime: currentRoom.levelStartTime || levelStartTime, // Use existing start time if available (cumulative)
                     currentLevel: currentLevel
                 };
                 
@@ -574,6 +608,13 @@ wss.on('connection', (ws, req) => {
         }
         
         const currentLevel = room.gameState.currentLevel || 1;
+        
+        // Broadcast time up message to all players
+        room.broadcast({
+            type: 'TIME_UP',
+            currentLevel: currentLevel,
+            playerScores: room.gameState.playerScores
+        });
         
         if (currentLevel < 3) {
             // Move to next level
