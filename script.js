@@ -49,9 +49,9 @@ class FindWordsGame {
         
         // Predefined word lists for random mode
         this.wordLists = {
-            easy: ['CAT', 'DOG', 'SUN', 'MOON', 'TREE', 'BOOK', 'FISH', 'BIRD'],
-            medium: ['COMPUTER', 'RAINBOW', 'OCEAN', 'MOUNTAIN', 'GARDEN', 'PLANET', 'CRYSTAL', 'THUNDER'],
-            hard: ['JAVASCRIPT', 'ALGORITHM', 'ADVENTURE', 'BUTTERFLY', 'KNOWLEDGE', 'TELESCOPE', 'SYMPHONY', 'MYSTERY']
+            easy: ['CAT', 'DOG', 'SUN', 'MOON', 'TREE', 'BOOK', 'FISH', 'BIRD', 'STAR', 'FIRE', 'WIND', 'SNOW', 'RAIN', 'CLOUD', 'LEAF', 'ROSE', 'LION', 'BEAR', 'DEER', 'WOLF', 'DUCK', 'OWL', 'EAGLE', 'SHARK', 'WHALE', 'TIGER', 'PANDA', 'KOALA', 'FROG', 'SNAKE'],
+            medium: ['COMPUTER', 'RAINBOW', 'OCEAN', 'MOUNTAIN', 'GARDEN', 'PLANET', 'CRYSTAL', 'THUNDER', 'FOREST', 'RIVER', 'VALLEY', 'DESERT', 'ISLAND', 'VOLCANO', 'WATERFALL', 'SUNSET', 'SUNRISE', 'STORM', 'LIGHTNING', 'TORNADO', 'HURRICANE', 'SEASHELL', 'DOLPHIN', 'ELEPHANT', 'GIRAFFE', 'PENGUIN', 'BUTTERFLY', 'DRAGONFLY', 'LADYBUG', 'HONEYBEE'],
+            hard: ['JAVASCRIPT', 'ALGORITHM', 'ADVENTURE', 'KNOWLEDGE', 'TELESCOPE', 'SYMPHONY', 'MYSTERY', 'ARCHITECTURE', 'PHOTOGRAPHY', 'ASTRONOMY', 'ARCHAEOLOGY', 'PHILOSOPHY', 'MATHEMATICS', 'CHEMISTRY', 'BIOLOGY', 'PHYSICS', 'GEOGRAPHY', 'HISTORY', 'LITERATURE', 'SCULPTURE', 'PAINTING', 'MUSICIAN', 'SCIENTIST', 'EXPLORER', 'INVENTOR', 'DISCOVERY', 'INVENTION', 'CREATIVITY', 'IMAGINATION', 'EXPERIMENT']
         };
         
         this.init();
@@ -251,9 +251,16 @@ class FindWordsGame {
 
         // Send new game to server if multiplayer and host
         if (this.playerMode === 'multiplayer' && this.isHost && this.wsConnected) {
+            // Validate words before sending
+            if (!this.words || !Array.isArray(this.words) || this.words.length === 0) {
+                console.error('Cannot send NEW_GAME: words are invalid', this.words);
+                alert('Error: Cannot create game - words not generated. Please try clicking "New Game" again.');
+                return;
+            }
+
             const gameState = {
-                grid: this.grid,
-                words: this.words,
+                grid: this.grid || [], // Grid is optional - each player generates their own
+                words: this.words, // Required - must be valid array
                 foundWords: Array.from(this.foundWords),
                 playerScores: this.playerScores,
                 playerFoundWords: {
@@ -269,6 +276,7 @@ class FindWordsGame {
                 currentLevel: this.currentLevel
             };
 
+            console.log('Sending NEW_GAME with', gameState.words.length, 'words');
             this.sendWebSocketMessage({
                 type: 'NEW_GAME',
                 gameState: gameState
@@ -932,109 +940,102 @@ class FindWordsGame {
         // In multiplayer mode, don't start locally - wait for server to send GAME_STARTED
         // This ensures both players start simultaneously
         if (this.playerMode === 'multiplayer' && this.isHost && this.wsConnected) {
-            // Validate that words are generated - with better error handling
-            if (!this.words) {
-                console.error('Words array is undefined');
-                alert('Error: Words not initialized.\n\nPlease:\n1. Click "New Game" button\n2. Wait for puzzle to appear\n3. Then click "Start Game"');
-                return;
-            }
+            // Get words - try multiple sources
+            let wordsToSend = null;
             
-            if (!Array.isArray(this.words)) {
-                console.error('Words is not an array:', typeof this.words, this.words);
-                alert('Error: Invalid words data.\n\nPlease:\n1. Click "New Game" button\n2. Wait for puzzle to appear\n3. Then click "Start Game"');
-                return;
+            // Priority 1: Current words array
+            if (this.words && Array.isArray(this.words) && this.words.length > 0) {
+                wordsToSend = [...this.words];
+                console.log('Using current words array:', wordsToSend.length, 'words');
             }
-            
-            if (this.words.length === 0) {
-                console.error('Words array is empty. Current words:', this.words);
-                // Try to restore from backup if available
-                if (this._backupWords && this._backupWords.length > 0) {
-                    console.log('Restoring words from backup:', this._backupWords);
-                    this.words = [...this._backupWords];
-                } else {
-                    alert('No words generated!\n\nPlease:\n1. Click "New Game" button\n2. Wait for puzzle to appear\n3. Then click "Start Game"\n\nIf this persists, refresh the page.');
-                    return;
+            // Priority 2: Backup words
+            else if (this._backupWords && Array.isArray(this._backupWords) && this._backupWords.length > 0) {
+                wordsToSend = [...this._backupWords];
+                this.words = [...this._backupWords]; // Restore to main array
+                console.log('Restored words from backup:', wordsToSend.length, 'words');
+            }
+            // Priority 3: Try to generate words on the fly
+            else {
+                console.warn('No words found, attempting to generate...');
+                this.generateRandomWords();
+                if (this.words && Array.isArray(this.words) && this.words.length > 0) {
+                    wordsToSend = [...this.words];
+                    console.log('Generated words on the fly:', wordsToSend.length, 'words');
                 }
             }
             
-            // Debug logging
-            console.log('Sending START_GAME - words array:', this.words);
-            console.log('Words array length:', this.words ? this.words.length : 'undefined');
-            console.log('Words array type:', Array.isArray(this.words) ? 'array' : typeof this.words);
-            console.log('Full game state being sent:', {
-                words: this.words,
-                wordsLength: this.words ? this.words.length : 0,
-                gridSize: this.gridSize,
-                mode: this.currentMode,
-                difficulty: this.difficulty,
-                currentLevel: this.currentLevel
-            });
-            
-            // Validate words one more time before sending
-            if (!this.words || !Array.isArray(this.words) || this.words.length === 0) {
-                console.error('CRITICAL: Words validation failed right before sending!', {
-                    words: this.words,
-                    isArray: Array.isArray(this.words),
-                    length: this.words ? this.words.length : 'N/A'
+            // Final check - if still no words, show error
+            if (!wordsToSend || !Array.isArray(wordsToSend) || wordsToSend.length === 0) {
+                console.error('FATAL: Could not get words!', {
+                    thisWords: this.words,
+                    backupWords: this._backupWords,
+                    wordsToSend: wordsToSend
                 });
-                alert('Error: Words are not properly generated. Please click "New Game" again and then "Start Game".');
+                alert('Error: Cannot start game - no words available.\n\nPlease:\n1. Click "New Game" button\n2. Wait for puzzle to appear\n3. Then click "Start Game"\n\nIf this persists, refresh the page.');
                 return;
             }
             
-            // Send only game config (words and settings), not the grid
-            // Each player will generate their own puzzle
+            // Ensure we have valid game settings
+            const gridSize = this.gridSize || 15;
+            const mode = this.currentMode || 'random';
+            const difficulty = this.difficulty || 'medium';
+            const currentLevel = this.currentLevel || 1;
+            
+            // Validate grid exists and is properly formatted
+            if (!this.grid || !Array.isArray(this.grid) || this.grid.length === 0) {
+                console.error('Grid is missing or invalid. Grid:', this.grid);
+                alert('Error: Puzzle grid is not ready. Please click "New Game" first to generate the puzzle, then click "Start Game".');
+                return;
+            }
+            
+            // Create gameState with guaranteed valid words and grid
+            // Include grid so both players see the same puzzle
             const gameState = {
-                words: this.words, // Same word list for all players
-                foundWords: Array.from(this.foundWords),
-                playerScores: this.playerScores,
+                words: wordsToSend, // Use the validated words array
+                grid: this.grid, // Include the grid so both players see the same puzzle
+                foundWords: Array.from(this.foundWords || []),
+                playerScores: this.playerScores || { 1: 0, 2: 0 },
                 playerFoundWords: {
-                    1: Array.from(this.playerFoundWords[1]),
-                    2: Array.from(this.playerFoundWords[2])
+                    1: Array.from((this.playerFoundWords && this.playerFoundWords[1]) || []),
+                    2: Array.from((this.playerFoundWords && this.playerFoundWords[2]) || [])
                 },
                 currentPlayer: 1,
                 gameStarted: true,
-                gridSize: this.gridSize,
-                mode: this.currentMode,
-                difficulty: this.difficulty,
-                customWords: this.customWords,
-                currentLevel: this.currentLevel
+                gridSize: gridSize,
+                mode: mode,
+                difficulty: difficulty,
+                customWords: this.customWords || [],
+                currentLevel: currentLevel
             };
             
-            // Final validation of gameState before sending
+            // Triple-check words are valid
             if (!gameState.words || !Array.isArray(gameState.words) || gameState.words.length === 0) {
-                console.error('CRITICAL: gameState.words validation failed!', gameState);
-                alert('Error: Invalid game state. Please refresh and try again.');
+                console.error('FATAL: gameState.words is invalid after all checks!', gameState);
+                alert('Critical error: Words validation failed. Please refresh the page.');
                 return;
             }
-
-            console.log('=== PREPARING TO SEND START_GAME ===');
-            console.log('gameState object:', gameState);
-            console.log('gameState.words:', gameState.words);
-            console.log('gameState.words type:', typeof gameState.words);
-            console.log('gameState.words is array:', Array.isArray(gameState.words));
-            console.log('gameState.words length:', gameState.words ? gameState.words.length : 'N/A');
+            
+            // Validate grid structure
+            if (!gameState.grid || !Array.isArray(gameState.grid) || gameState.grid.length !== gridSize) {
+                console.error('FATAL: gameState.grid is invalid!', {
+                    grid: gameState.grid,
+                    gridLength: gameState.grid ? gameState.grid.length : 'null',
+                    expectedSize: gridSize
+                });
+                alert('Critical error: Grid validation failed. Please click "New Game" again, then "Start Game".');
+                return;
+            }
+            
+            console.log('✓ Sending START_GAME with', gameState.words.length, 'words:', gameState.words);
             
             const messageToSend = {
                 type: 'START_GAME',
                 gameState: gameState
             };
             
-            // Final check before sending
-            if (!messageToSend.gameState) {
-                console.error('CRITICAL: gameState is missing from message!');
-                alert('Error: Game state is missing. Please refresh and try again.');
-                return;
-            }
-            
-            if (!messageToSend.gameState.words || !Array.isArray(messageToSend.gameState.words) || messageToSend.gameState.words.length === 0) {
-                console.error('CRITICAL: Invalid words in gameState!', messageToSend.gameState);
-                alert('Error: Words are invalid. Please click "New Game" again.');
-                return;
-            }
-            
-            console.log('✓ All validations passed. Sending START_GAME message to server...');
+            // Send the message
             this.sendWebSocketMessage(messageToSend);
-            console.log('✓ START_GAME message sent successfully');
+            console.log('✓ START_GAME message sent to server');
             
             // Don't start locally - wait for server response to ensure synchronization
             return;
@@ -1444,7 +1445,7 @@ class FindWordsGame {
 
             case 'GAME_STARTED':
                 console.log('Received GAME_STARTED message', data);
-                // Receive game config and generate own puzzle
+                // Receive game config and use the same puzzle (grid) for all players
                 if (data.gameConfig) {
                     console.log('Processing gameConfig:', data.gameConfig);
                     // Set game configuration
@@ -1459,11 +1460,45 @@ class FindWordsGame {
                     this.playerFoundWords = { 1: new Set(), 2: new Set() };
                     this.currentPlayer = 1;
                     
-                    console.log('Generating puzzle for player', this.playerNumber);
-                    // Generate own puzzle with the same word list
-                    this.createGrid();
-                    this.placeWords();
-                    this.fillEmptySpaces();
+                    // Use the grid from server so both players see the same puzzle
+                    if (data.gameConfig.grid && Array.isArray(data.gameConfig.grid) && data.gameConfig.grid.length > 0) {
+                        console.log('Using grid from server for player', this.playerNumber);
+                        this.grid = data.gameConfig.grid.map(row => 
+                            row.map(cell => ({
+                                ...cell,
+                                found: false // Reset found status for new game
+                            }))
+                        );
+                    } else {
+                        console.warn('No grid in gameConfig, generating own puzzle');
+                        // Fallback: generate own puzzle if grid not provided
+                        this.createGrid();
+                        this.placeWords();
+                        this.fillEmptySpaces();
+                    }
+                    
+                    // Rebuild placedWords array from grid for hints to work
+                    this.placedWords = [];
+                    if (this.grid && this.words) {
+                        for (let wordIndex = 0; wordIndex < this.words.length; wordIndex++) {
+                            const word = this.words[wordIndex];
+                            const wordCells = [];
+                            for (let i = 0; i < this.gridSize; i++) {
+                                for (let j = 0; j < this.gridSize; j++) {
+                                    if (this.grid[i] && this.grid[i][j] && this.grid[i][j].wordIndex === wordIndex) {
+                                        wordCells.push({ row: i, col: j });
+                                    }
+                                }
+                            }
+                            if (wordCells.length > 0) {
+                                this.placedWords[wordIndex] = {
+                                    word: word,
+                                    cells: wordCells
+                                };
+                            }
+                        }
+                    }
+                    
                     this.renderGrid();
                     this.renderWordsList();
                     this.updateStats();
@@ -1480,7 +1515,7 @@ class FindWordsGame {
                         grid.classList.remove('blurred');
                     }
                     
-                    console.log('Puzzle generated and displayed for player', this.playerNumber);
+                    console.log('Puzzle displayed for player', this.playerNumber);
                 } else {
                     console.warn('No gameConfig in GAME_STARTED, using fallback');
                     // Fallback to old format for compatibility

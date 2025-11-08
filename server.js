@@ -246,61 +246,56 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // Debug logging - log the raw data structure
-        console.log('=== handleStartGame DEBUG ===');
-        console.log('Received data type:', typeof data);
-        console.log('Received data keys:', Object.keys(data || {}));
-        console.log('data.gameState exists?', !!data.gameState);
-        if (data.gameState) {
-            console.log('gameState keys:', Object.keys(data.gameState));
-            console.log('gameState.words exists?', !!data.gameState.words);
-            console.log('gameState.words type:', typeof data.gameState.words);
-            console.log('gameState.words is array?', Array.isArray(data.gameState.words));
-            if (data.gameState.words) {
-                console.log('gameState.words length:', data.gameState.words.length);
-                console.log('gameState.words content:', data.gameState.words);
-            }
-        }
-        console.log('Full data object:', JSON.stringify(data, null, 2));
-        console.log('=== END DEBUG ===');
+        // Simplified validation with clear error messages
+        console.log('=== handleStartGame ===');
+        console.log('Data received. Type:', data ? data.type : 'null');
         
         if (!data) {
-            console.error('data is null or undefined');
-            sendError(ws, 'Invalid game state data: no data received');
+            console.error('✗ No data received');
+            sendError(ws, 'No data received from client');
             return;
         }
         
         if (!data.gameState) {
-            console.error('gameState is missing from data. Data structure:', Object.keys(data));
-            sendError(ws, 'Invalid game state data: gameState is missing. Received keys: ' + Object.keys(data).join(', '));
+            console.error('✗ gameState missing. Data keys:', Object.keys(data));
+            sendError(ws, 'Missing gameState. Please click "New Game" first, then "Start Game"');
             return;
         }
         
-        if (!data.gameState.words) {
-            console.error('words is missing from gameState. gameState keys:', Object.keys(data.gameState));
-            sendError(ws, 'Invalid game state data: words is missing from gameState');
+        // Check words with detailed logging
+        const words = data.gameState.words;
+        console.log('Words check:', {
+            exists: !!words,
+            type: typeof words,
+            isArray: Array.isArray(words),
+            length: words ? (Array.isArray(words) ? words.length : 'not array') : 'null/undefined'
+        });
+        
+        if (!words) {
+            console.error('✗ words is null/undefined');
+            sendError(ws, 'Words are missing. Please click "New Game" to generate puzzle first');
             return;
         }
         
-        if (!Array.isArray(data.gameState.words)) {
-            console.error('words is not an array. Type:', typeof data.gameState.words, 'Value:', data.gameState.words);
-            sendError(ws, 'Invalid game state data: words is not an array (type: ' + typeof data.gameState.words + ')');
+        if (!Array.isArray(words)) {
+            console.error('✗ words is not an array. Type:', typeof words, 'Value:', words);
+            sendError(ws, 'Words must be an array. Please refresh and try again');
             return;
         }
         
-        if (data.gameState.words.length === 0) {
-            console.error('words array is empty');
-            sendError(ws, 'Invalid game state data: words array is empty. Please click "New Game" first!');
+        if (words.length === 0) {
+            console.error('✗ words array is empty');
+            sendError(ws, 'Words array is empty. Please click "New Game" to generate puzzle first');
             return;
         }
         
-        console.log('✓ Validation passed. Words array has', data.gameState.words.length, 'items');
+        console.log('✓ Validation passed! Words:', words.length, 'items');
 
-        // Initialize game state from config (store words and config, but NOT the grid)
-        // Each player will generate their own puzzle with the same word list
+        // Initialize game state from config (store words and grid so both players see the same puzzle)
         const currentLevel = data.gameState.currentLevel || 1;
         currentRoom.gameState = {
             words: data.gameState.words, // Same words for all players
+            grid: data.gameState.grid || [], // Same grid for all players
             foundWords: new Set(),
             playerScores: data.gameState.playerScores || { 1: 0, 2: 0 }, // Keep scores across levels
             playerFoundWords: { 1: new Set(), 2: new Set() },
@@ -320,8 +315,7 @@ wss.on('connection', (ws, req) => {
             handleLevelTimeUp(currentRoom);
         }, 120000); // 2 minutes = 120000ms
         
-        // Send game config to each player individually (they will generate their own puzzles)
-        // This ensures each player gets a different puzzle layout
+        // Send game config to each player (including the grid so both players see the same puzzle)
         // IMPORTANT: Send to ALL players including the host
         const playersList = Array.from(currentRoom.players.entries());
         console.log(`Sending GAME_STARTED to ${playersList.length} players (including host)`);
@@ -329,6 +323,7 @@ wss.on('connection', (ws, req) => {
         playersList.forEach(([id, player]) => {
             const gameConfig = {
                 words: data.gameState.words,
+                grid: data.gameState.grid || [], // Include grid so both players see the same puzzle
                 gridSize: data.gameState.gridSize || 15,
                 mode: data.gameState.mode || 'random',
                 difficulty: data.gameState.difficulty || 'medium',
@@ -344,7 +339,7 @@ wss.on('connection', (ws, req) => {
             if (player.ws.readyState === WebSocket.OPEN) {
                 const message = {
                     type: 'GAME_STARTED',
-                    gameConfig: gameConfig, // Send config instead of full game state
+                    gameConfig: gameConfig, // Send config with grid so both players see the same puzzle
                     levelStartTime: levelStartTime,
                     currentLevel: currentLevel
                 };
@@ -361,7 +356,7 @@ wss.on('connection', (ws, req) => {
             }
         });
 
-        console.log(`Game started in room ${currentRoom.roomCode}, Level ${currentLevel} - Each player will generate their own puzzle`);
+        console.log(`Game started in room ${currentRoom.roomCode}, Level ${currentLevel} - Both players will see the same puzzle`);
     }
 
     function handleWordFound(ws, data) {
@@ -446,24 +441,50 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        if (!data.gameState || !data.gameState.grid || !data.gameState.words) {
-            sendError(ws, 'Invalid game state data');
+        // Improved validation with detailed error messages
+        if (!data || !data.gameState) {
+            sendError(ws, 'Missing game state data. Please click "New Game" first.');
+            return;
+        }
+
+        // Check words - this is required
+        if (!data.gameState.words) {
+            sendError(ws, 'Words are missing. Please click "New Game" to generate puzzle first.');
+            return;
+        }
+
+        if (!Array.isArray(data.gameState.words)) {
+            sendError(ws, 'Words must be an array. Please refresh and try again.');
+            return;
+        }
+
+        if (data.gameState.words.length === 0) {
+            sendError(ws, 'Words array is empty. Please click "New Game" to generate puzzle first.');
+            return;
+        }
+
+        // Grid is optional in new architecture (each player generates their own)
+        // But we'll still validate it if provided
+        if (data.gameState.grid && !Array.isArray(data.gameState.grid)) {
+            sendError(ws, 'Grid must be an array. Please refresh and try again.');
             return;
         }
 
         // Reset game state
+        // Note: grid is optional since each player generates their own puzzle
         currentRoom.gameState = {
-            grid: data.gameState.grid,
-            words: data.gameState.words,
+            grid: data.gameState.grid || [], // Optional - each player has their own grid
+            words: data.gameState.words, // Required - same words for all players
             foundWords: new Set(),
-            playerScores: { 1: 0, 2: 0 },
+            playerScores: data.gameState.playerScores || { 1: 0, 2: 0 },
             playerFoundWords: { 1: new Set(), 2: new Set() },
             currentPlayer: 1,
             gameStarted: false,
             gridSize: data.gameState.gridSize || 15,
             mode: data.gameState.mode || 'random',
             difficulty: data.gameState.difficulty || 'medium',
-            customWords: data.gameState.customWords || []
+            customWords: data.gameState.customWords || [],
+            currentLevel: data.gameState.currentLevel || 1
         };
 
         // Convert Sets to Arrays for broadcasting
