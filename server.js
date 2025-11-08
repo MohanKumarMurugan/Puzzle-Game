@@ -2,12 +2,70 @@
  * WebSocket Server for Find Words Multiplayer Game
  * Handles real-time game synchronization between multiple players
  */
-
+// === WALRUS IMPORTS & SETUP ===
+require('dotenv').config();
+const http = require('http');// ✅ Fix for Node 14 / 16 // For HTTP requests
 const WebSocket = require('ws');
-const http = require('http');
+const fetch = require('node-fetch');
+const WALRUS_PUBLISHER_URL = process.env.PUBLISHER || "https://publisher.walrus-testnet.walrus.space";
+const WALRUS_AGGREGATOR_URL = process.env.AGGREGATOR || "https://aggregator.walrus-testnet.walrus.space";
 
+// ✅ Test Walrus connection (non-404 version)
+(async () => {
+  try {
+    const res = await fetch(`${WALRUS_PUBLISHER_URL}/v1/blobs`, { method: "OPTIONS" });
+    if (res.status === 200 || res.status === 204 || res.status === 405)
+      console.log("🌐 Walrus Publisher reachable ✅");
+    else
+      console.log("⚠️ Walrus Publisher response:", res.status);
+  } catch (e) {
+    console.log("❌ Unable to reach Walrus Publisher:", e.message);
+  }
+})();
+
+
+// ✅ Create HTTP + WebSocket servers
 const server = http.createServer();
 const wss = new WebSocket.Server({ server });
+
+// ✅ Define the OPEN constant for socket state checking
+const OPEN = WebSocket.OPEN;
+
+// Upload JSON data to Walrus Publisher
+async function claimToWalrus(data) {
+    try {
+        const response = await fetch(`${WALRUS_PUBLISHER_URL}/v1/blobs`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: Buffer.from(JSON.stringify(data))
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("❌ Failed to upload to Walrus:", errorText);
+            return null;
+        }
+
+        const result = await response.json();
+        console.log("✅ Uploaded to Walrus:", result);
+        return result;
+    } catch (error) {
+        console.error("❌ Walrus upload error:", error);
+        return null;
+    }
+}
+
+// (Optional) Retrieve blob from aggregator
+async function fetchWalrusBlob(blobId) {
+    try {
+        const res = await fetch(`${WALRUS_AGGREGATOR_URL}/v1/blobs/${blobId}`);
+        if (!res.ok) throw new Error("Failed to fetch blob");
+        return await res.json();
+    } catch (err) {
+        console.error("Error fetching blob:", err);
+        return null;
+    }
+}
 
 // Game rooms storage
 const rooms = new Map();
@@ -61,7 +119,7 @@ class GameRoom {
     broadcast(message, excludePlayerId = null) {
         const data = JSON.stringify(message);
         this.players.forEach((player, id) => {
-            if (id !== excludePlayerId && player.ws.readyState === WebSocket.OPEN) {
+            if (id !== excludePlayerId && player.ws.readyState === OPEN) {
                 player.ws.send(data);
             }
         });
@@ -336,7 +394,7 @@ wss.on('connection', (ws, req) => {
                 gameStarted: true
             };
 
-            if (player.ws.readyState === WebSocket.OPEN) {
+            if (player.ws.readyState === OPEN) {
                 const message = {
                     type: 'GAME_STARTED',
                     gameConfig: gameConfig, // Send config with grid so both players see the same puzzle
@@ -584,35 +642,61 @@ wss.on('connection', (ws, req) => {
         }
     }
 
-    function handleGameOver(room) {
-        // Clear timer
-        if (room.levelTimer) {
-            clearTimeout(room.levelTimer);
-        }
-        
-        // Determine winner
-        const player1Score = room.gameState.playerScores[1];
-        const player2Score = room.gameState.playerScores[2];
-        
-        let winner = 0; // 0 = tie, 1 = player 1, 2 = player 2
-        if (player1Score > player2Score) {
-            winner = 1;
-        } else if (player2Score > player1Score) {
-            winner = 2;
-        }
-        
-        // Broadcast game over
-        room.broadcast({
-            type: 'GAME_OVER',
-            playerScores: room.gameState.playerScores,
-            winner: winner
-        });
-        
-        console.log(`Game over in room ${room.roomCode}. Winner: Player ${winner || 'Tie'}`);
+    async function handleGameOver(room) {
+    // Clear timer
+    if (room.levelTimer) {
+        clearTimeout(room.levelTimer);
     }
 
+    // Determine winner
+    const player1Score = room.gameState.playerScores[1];
+    const player2Score = room.gameState.playerScores[2];
+
+    let winner = 0; // 0 = tie, 1 = player 1, 2 = player 2
+    if (player1Score > player2Score) {
+        winner = 1;
+    } else if (player2Score > player1Score) {
+        winner = 2;
+    }
+
+    // Prepare data to upload to Walrus
+    const gameResult = {
+        roomCode: room.roomCode,
+        timestamp: new Date().toISOString(),
+        player1: room.players.get([...room.players.keys()][0])?.name || "Player 1",
+        player2: room.players.get([...room.players.keys()][1])?.name || "Player 2",
+        scores: { player1: player1Score, player2: player2Score },
+        winner: winner === 0 ? "Tie" : `Player ${winner}`,
+    };
+
+    console.log("🏁 Uploading final result to Walrus:", gameResult);
+
+    // Upload to Walrus
+    const claim = await claimToWalrus(gameResult);
+    let blobId = null;
+    if (claim && claim.newlyCreated && claim.newlyCreated.blobObject) {
+        blobId = claim.newlyCreated.blobObject.blobId;
+    }
+
+    // Broadcast game over + Walrus claim info
+    room.broadcast({
+        type: 'GAME_OVER',
+        playerScores: room.gameState.playerScores,
+        winner: winner,
+        walrus: {
+            uploaded: !!blobId,
+            blobId: blobId,
+            aggregatorUrl: blobId ? `${WALRUS_AGGREGATOR_URL}/v1/blobs/${blobId}` : null
+        }
+    });
+
+    console.log(`🎉 Game over in room ${room.roomCode}. Winner: ${winner || 'Tie'}`);
+    if (blobId) console.log(`📦 Walrus Blob ID: ${blobId}`);
+ }
+
+
     function sendError(ws, message) {
-        if (ws.readyState === WebSocket.OPEN) {
+        if (ws.readyState === OPEN) {
             ws.send(JSON.stringify({
                 type: 'ERROR',
                 message

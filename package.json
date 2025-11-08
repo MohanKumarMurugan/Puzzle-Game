@@ -16,10 +16,11 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "dotenv": "^17.2.3",
+    "node-fetch": "^2.7.0",
     "ws": "^8.14.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
   }
 }
-
