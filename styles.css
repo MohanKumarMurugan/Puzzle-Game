@@ -55,6 +55,27 @@ header:hover {
     box-shadow: 0 15px 50px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(255, 255, 255, 0.5);
 }
 
+/* Header Top Section */
+.header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.header-top h1 {
+    text-align: left;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin: 0;
+    font-size: 2.8em;
+    font-weight: 800;
+    letter-spacing: -1px;
+    text-shadow: none;
+}
+
 h1 {
     text-align: center;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -66,6 +87,188 @@ h1 {
     font-weight: 800;
     letter-spacing: -1px;
     text-shadow: none;
+}
+
+/* Wallet Connection */
+.wallet-connection {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.wallet-btn {
+    padding: 10px 20px;
+    background: linear-gradient(45deg, #667eea, #764ba2);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+    white-space: nowrap;
+}
+
+.wallet-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+    background: linear-gradient(45deg, #5a67d8, #6b46c1);
+}
+
+.wallet-btn.connected {
+    background: linear-gradient(45deg, #48bb78, #38a169);
+}
+
+.wallet-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 15px;
+    background: rgba(102, 126, 234, 0.1);
+    border-radius: 10px;
+    border: 2px solid rgba(102, 126, 234, 0.3);
+}
+
+.wallet-address {
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    color: #4a5568;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.wallet-address:hover {
+    color: #667eea;
+}
+
+.wallet-disconnect-btn {
+    padding: 5px 12px;
+    background: #e53e3e;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.wallet-disconnect-btn:hover {
+    background: #c53030;
+    transform: translateY(-1px);
+}
+
+.wallet-network {
+    font-size: 11px;
+    color: #718096;
+    font-weight: 500;
+    padding: 2px 8px;
+    background: rgba(102, 126, 234, 0.1);
+    border-radius: 4px;
+}
+
+/* Wallet Connection Confirmation Notification */
+.wallet-confirmation {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 10000;
+    background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+    border-radius: 15px;
+    padding: 0;
+    box-shadow: 0 10px 40px rgba(72, 187, 120, 0.4);
+    animation: slideInRight 0.3s ease-out;
+    max-width: 350px;
+    backdrop-filter: blur(10px);
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.wallet-confirmation-content {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 20px;
+    color: white;
+}
+
+.wallet-confirmation-icon {
+    font-size: 32px;
+    flex-shrink: 0;
+}
+
+.wallet-confirmation-text {
+    flex: 1;
+}
+
+.wallet-confirmation-text strong {
+    display: block;
+    font-size: 18px;
+    margin-bottom: 8px;
+    font-weight: 700;
+}
+
+.wallet-confirmation-address {
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    opacity: 0.9;
+    margin-bottom: 4px;
+    word-break: break-all;
+}
+
+.wallet-confirmation-balance,
+.wallet-confirmation-network {
+    font-size: 12px;
+    opacity: 0.8;
+    margin-top: 4px;
+}
+
+.wallet-confirmation-close {
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    flex-shrink: 0;
+}
+
+.wallet-confirmation-close:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: scale(1.1);
+}
+
+@media (max-width: 768px) {
+    .header-top {
+        flex-direction: column;
+        gap: 15px;
+    }
+    
+    .header-top h1 {
+        text-align: center;
+    }
+    
+    .wallet-connection {
+        width: 100%;
+        justify-content: center;
+    }
 }
 
 .game-controls {
