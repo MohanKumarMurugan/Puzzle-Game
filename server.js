@@ -175,13 +175,40 @@ class GameRoom {
   }
 }
 
+// === HELPER FUNCTION: Send Error Message ===
+function sendError(ws, message) {
+  if (ws && ws.readyState === OPEN) {
+    try {
+      ws.send(JSON.stringify({ type: 'ERROR', message }));
+      console.error('❌ Error sent to client:', message);
+    } catch (error) {
+      console.error('❌ Failed to send error message:', error);
+    }
+  }
+}
+
 // === WEBSOCKET HANDLER ===
 wss.on('connection', (ws) => {
   let playerId = `p_${Date.now()}_${Math.random()}`;
   let currentRoom = null;
 
+  console.log(`✅ New WebSocket connection: ${playerId}`);
+
+  // Handle connection errors
+  ws.on('error', (error) => {
+    console.error(`❌ WebSocket error for ${playerId}:`, error);
+  });
+
   ws.on('message', async (message) => {
-    const data = JSON.parse(message.toString());
+    let data;
+    try {
+      data = JSON.parse(message.toString());
+    } catch (error) {
+      console.error('❌ Failed to parse WebSocket message:', error);
+      console.error('Raw message:', message.toString());
+      sendError(ws, 'Invalid message format');
+      return;
+    }
 
     if (data.type === 'CREATE_ROOM') {
       const roomCode = generateRoomCode();
@@ -350,6 +377,7 @@ wss.on('connection', (ws) => {
         playerId,
         playerNumber,
         wordIndex,
+        cells: data.cells || [], // Include cell positions so both players can see where word was found
         playerScores: {
           1: p1Score,
           2: p2Score
@@ -469,6 +497,32 @@ wss.on('connection', (ws) => {
       });
 
       console.log(`🎉 Game over in room ${currentRoom.roomCode}. Walrus blob: ${blobId || 'none'}`);
+    } else {
+      // Unknown message type
+      console.warn(`⚠️ Unknown message type: ${data.type}`);
+      sendError(ws, `Unknown message type: ${data.type}`);
+    }
+  });
+
+  // Handle client disconnect
+  ws.on('close', () => {
+    console.log(`🔌 WebSocket disconnected: ${playerId}`);
+    if (currentRoom) {
+      // Remove player from room
+      currentRoom.players.delete(playerId);
+      
+      // If room is empty, clean it up
+      if (currentRoom.players.size === 0) {
+        rooms.delete(currentRoom.roomCode);
+        console.log(`🗑️ Removed empty room: ${currentRoom.roomCode}`);
+      } else {
+        // Notify remaining players
+        currentRoom.broadcast({ 
+          type: 'PLAYER_LEFT', 
+          playerId,
+          playersRemaining: currentRoom.players.size 
+        });
+      }
     }
   });
 });

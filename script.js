@@ -55,6 +55,7 @@ class FindWordsGame {
         this.wsConnected = false;
         this.wsServerUrl = 'ws://localhost:3000';
         this.pendingActions = []; // Queue for actions pending WebSocket connection
+        this.pendingWordFound = null; // Store word found data while waiting for server confirmation
         
         // Predefined word lists for random mode
         this.wordLists = {
@@ -732,9 +733,13 @@ class FindWordsGame {
                 this.currentPlayer = this.currentPlayer === 1 ? 2 : 1;
                 this.updatePlayerTurnIndicator();
             } else if (this.playerMode === 'multiplayer') {
-                // Multiplayer mode - DON'T update scores locally
-                // Mark word as found locally for display, but wait for server to update scores
-                this.playerFoundWords[this.playerNumber].add(foundWordIndex);
+                // Multiplayer mode - DON'T update scores or mark cells locally yet
+                // Wait for server confirmation to ensure synchronization
+                // Store the found word info temporarily
+                const foundWordData = {
+                    wordIndex: foundWordIndex,
+                    cells: [...this.selectedCells]
+                };
                 
                 // Send to server - server will update scores and broadcast to both players
                 if (this.wsConnected && this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -745,7 +750,10 @@ class FindWordsGame {
                     };
                     console.log('📤 Sending WORD_FOUND to server:', message);
                     this.sendWebSocketMessage(message);
-                    console.log(`✅ WORD_FOUND sent - waiting for server score update`);
+                    console.log(`✅ WORD_FOUND sent - waiting for server confirmation`);
+                    
+                    // Store pending word data - will be processed when server confirms
+                    this.pendingWordFound = foundWordData;
                 } else {
                     console.error('❌ Cannot send WORD_FOUND - WebSocket not connected!', {
                         wsConnected: this.wsConnected,
@@ -753,40 +761,53 @@ class FindWordsGame {
                         readyState: this.ws ? this.ws.readyState : 'N/A'
                     });
                     // Fallback: update locally if WebSocket is not available
+                    this.playerFoundWords[this.playerNumber].add(foundWordIndex);
                     this.playerScores[this.playerNumber] = (this.playerScores[this.playerNumber] || 0) + 1;
                     this.updatePlayerStats();
-                }
-            }
-            
-            // If the found word was the current hint word, reset hint tracking
-            if (this.currentHintWordIndex === foundWordIndex) {
-                this.currentHintWordIndex = -1;
-                this.clearHints();
-            }
-            
-            this.updateStats();
-            
-            // Win condition check
-            // In multiplayer, server handles win condition via WORD_FOUND broadcast
-            // In local modes, check locally
-            if (this.playerMode !== 'multiplayer') {
-                this.checkWinCondition();
-            }
-            
-            // Animate found cells with player color in 2-player mode
-            this.selectedCells.forEach(({ row, col }) => {
-                const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
-                if (cell) {
-                    setTimeout(() => {
-                        cell.classList.add('found');
-                        if (this.playerMode === 'two' || this.playerMode === 'multiplayer') {
-                            const playerNum = this.playerMode === 'multiplayer' ? this.playerNumber : (this.currentPlayer === 1 ? 2 : 1);
-                            cell.classList.add(`player-${playerNum}-found`);
+                    this.markWordAsFound(foundWordIndex);
+                    this.updateStats();
+                    // Mark cells
+                    this.selectedCells.forEach(({ row, col }) => {
+                        const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                        if (cell) {
+                            setTimeout(() => {
+                                cell.classList.add('found');
+                                cell.classList.add(`player-${this.playerNumber}-found`);
+                            }, 100);
                         }
-                    }, 100);
+                        this.grid[row][col].found = true;
+                    });
                 }
-                this.grid[row][col].found = true;
-            });
+            } else {
+                // Single player or two-player local mode - update immediately
+                // If the found word was the current hint word, reset hint tracking
+                if (this.currentHintWordIndex === foundWordIndex) {
+                    this.currentHintWordIndex = -1;
+                    this.clearHints();
+                }
+                
+                this.updateStats();
+                
+                // Win condition check
+                if (this.playerMode !== 'multiplayer') {
+                    this.checkWinCondition();
+                }
+                
+                // Animate found cells with player color in 2-player mode
+                this.selectedCells.forEach(({ row, col }) => {
+                    const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                    if (cell) {
+                        setTimeout(() => {
+                            cell.classList.add('found');
+                            if (this.playerMode === 'two') {
+                                const playerNum = this.currentPlayer === 1 ? 2 : 1;
+                                cell.classList.add(`player-${playerNum}-found`);
+                            }
+                        }, 100);
+                    }
+                    this.grid[row][col].found = true;
+                });
+            }
         }
     }
 
@@ -1900,6 +1921,16 @@ class FindWordsGame {
                 alert(`Player ${data.playerNumber} disconnected`);
                 break;
 
+            case 'PLAYER_LEFT':
+                this.updatePlayersCount(data.playersRemaining || 1);
+                alert(`A player left the room. Players remaining: ${data.playersRemaining || 1}`);
+                break;
+
+            case 'ERROR':
+                console.error('Server error:', data.message);
+                alert(`Error: ${data.message}`);
+                break;
+
             case 'GAME_CONFIG_UPDATED':
                 // Game config updated by host
                 break;
@@ -2123,7 +2154,8 @@ class FindWordsGame {
                     foundBy: data.playerNumber,
                     myNumber: this.playerNumber,
                     scores: data.playerScores,
-                    wordIndex: data.wordIndex
+                    wordIndex: data.wordIndex,
+                    isMyWord: data.playerNumber === this.playerNumber
                 });
                 
                 // Update scores from server (authoritative source) - CRITICAL for synchronization
@@ -2159,6 +2191,42 @@ class FindWordsGame {
                     if (data.playerNumber) {
                         this.playerFoundWords[data.playerNumber].add(data.wordIndex);
                     }
+                }
+                
+                // Mark cells on grid if cell data is provided
+                // This allows both players to see where words were found
+                if (data.cells && Array.isArray(data.cells) && data.cells.length > 0) {
+                    const isMyWord = data.playerNumber === this.playerNumber;
+                    
+                    data.cells.forEach(({ row, col }) => {
+                        const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                        if (cell) {
+                            // Mark cell as found
+                            cell.classList.add('found');
+                            // Add player-specific styling
+                            if (data.playerNumber) {
+                                cell.classList.add(`player-${data.playerNumber}-found`);
+                            }
+                            // Update grid data
+                            if (this.grid[row] && this.grid[row][col]) {
+                                this.grid[row][col].found = true;
+                            }
+                        }
+                    });
+                    
+                    console.log(`✅ Marked ${data.cells.length} cells as found (found by player ${data.playerNumber})`);
+                }
+                
+                // Clear pending word if this is our own word (server confirmed it)
+                if (data.playerNumber === this.playerNumber && this.pendingWordFound) {
+                    console.log('✅ Server confirmed our word find - clearing pending');
+                    this.pendingWordFound = null;
+                }
+                
+                // If the found word was the current hint word, reset hint tracking
+                if (this.currentHintWordIndex === data.wordIndex) {
+                    this.currentHintWordIndex = -1;
+                    this.clearHints();
                 }
                 
                 // CRITICAL: Update UI immediately - this ensures both players see updated scores
