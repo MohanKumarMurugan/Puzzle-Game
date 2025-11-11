@@ -23,8 +23,8 @@ class FindWordsGame {
         this.currentHintWordIndex = -1; // Track the current word being hinted
         this.gameStarted = false; // Track if game has started
         
-        // Multiplayer mode properties (only mode available)
-        this.playerMode = 'multiplayer'; // Only multiplayer mode
+        // Player mode properties
+        this.playerMode = 'multiplayer'; // 'single', 'two', or 'multiplayer'
         this.currentPlayer = 1; // 1 or 2
         this.playerScores = { 1: 0, 2: 0 };
         this.playerFoundWords = { 1: new Set(), 2: new Set() };
@@ -72,7 +72,7 @@ class FindWordsGame {
      */
     init() {
         this.bindEvents();
-        // Auto-set multiplayer mode
+        // Default to multiplayer mode
         this.setPlayerMode('multiplayer');
         // Auto-connect to WebSocket server on page load
         this.connectWebSocket();
@@ -104,6 +104,8 @@ class FindWordsGame {
      */
     bindEvents() {
         // Player mode selection (only multiplayer available)
+        document.getElementById('singlePlayerMode').addEventListener('click', () => this.setPlayerMode('single'));
+        document.getElementById('twoPlayerMode').addEventListener('click', () => this.setPlayerMode('two'));
         document.getElementById('multiplayerMode').addEventListener('click', () => this.setPlayerMode('multiplayer'));
         
         // Multiplayer controls
@@ -163,24 +165,62 @@ class FindWordsGame {
     }
 
     /**
-     * Set player mode (only multiplayer available)
+     * Set player mode (single, two, or multiplayer)
      */
     setPlayerMode(mode) {
-        this.playerMode = 'multiplayer'; // Force multiplayer mode
+        this.playerMode = mode;
         
-        // Update UI
-        document.getElementById('multiplayerMode').classList.add('active');
-        document.getElementById('multiplayerPanel').classList.remove('hidden');
+        // Update button states
+        document.getElementById('singlePlayerMode').classList.remove('active');
+        document.getElementById('twoPlayerMode').classList.remove('active');
+        document.getElementById('multiplayerMode').classList.remove('active');
         
-        // Show player stats
+        // Show/hide multiplayer panel
+        const multiplayerPanel = document.getElementById('multiplayerPanel');
         const playerStats = document.getElementById('playerStats');
-        playerStats.classList.remove('hidden');
+        const playerScoresDisplay = document.getElementById('playerScoresDisplay');
         
-        // Show player scores display above game box
-        document.getElementById('playerScoresDisplay').classList.remove('hidden');
+        if (mode === 'multiplayer') {
+            document.getElementById('multiplayerMode').classList.add('active');
+            multiplayerPanel.classList.remove('hidden');
+            playerStats.classList.remove('hidden');
+            playerScoresDisplay.classList.remove('hidden');
+            
+            // Connect to WebSocket if not already connected
+            if (!this.wsConnected) {
+                this.connectWebSocket();
+            }
+        } else if (mode === 'two') {
+            document.getElementById('twoPlayerMode').classList.add('active');
+            multiplayerPanel.classList.add('hidden');
+            playerStats.classList.remove('hidden');
+            playerScoresDisplay.classList.add('hidden');
+            
+            // Disconnect WebSocket for local 2-player mode
+            this.disconnectWebSocket();
+        } else if (mode === 'single') {
+            document.getElementById('singlePlayerMode').classList.add('active');
+            multiplayerPanel.classList.add('hidden');
+            playerStats.classList.add('hidden');
+            playerScoresDisplay.classList.add('hidden');
+            
+            // Disconnect WebSocket for single player mode
+            this.disconnectWebSocket();
+        }
         
-        // Hide buttons that shouldn't be visible in multiplayer
-        // (Already handled by multiplayer-hidden class in HTML)
+        // Show/hide controls based on mode
+        const modeSelectors = document.querySelectorAll('.multiplayer-hidden');
+        if (mode === 'multiplayer') {
+            modeSelectors.forEach(el => el.classList.add('hidden'));
+        } else {
+            modeSelectors.forEach(el => el.classList.remove('hidden'));
+        }
+        
+        // Show words section for single and two-player modes
+        const wordsSection = document.getElementById('wordsToFindSection');
+        if (mode !== 'multiplayer' && wordsSection) {
+            wordsSection.classList.remove('hidden');
+        }
     }
 
     /**
