@@ -24,7 +24,7 @@ class FindWordsGame {
         this.gameStarted = false; // Track if game has started
         
         // Player mode properties
-        this.playerMode = 'multiplayer'; // 'single', 'two', or 'multiplayer'
+        this.playerMode = 'single'; // 'single', 'two', or 'multiplayer'
         this.currentPlayer = 1; // 1 or 2
         this.playerScores = { 1: 0, 2: 0 };
         this.playerFoundWords = { 1: new Set(), 2: new Set() };
@@ -72,11 +72,10 @@ class FindWordsGame {
      */
     init() {
         this.bindEvents();
-        // Default to multiplayer mode
-        this.setPlayerMode('multiplayer');
-        // Auto-connect to WebSocket server on page load
-        this.connectWebSocket();
-        // Don't auto-start game, wait for room creation
+        // Default to single player mode
+        this.setPlayerMode('single');
+        // Don't auto-connect to WebSocket - only connect when multiplayer is selected
+        // WebSocket will be connected when user selects multiplayer mode
         
         // Wallet address for Walrus integration
         this.walletAddress = null;
