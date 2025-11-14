@@ -23,8 +23,8 @@ class FindWordsGame {
         this.currentHintWordIndex = -1; // Track the current word being hinted
         this.gameStarted = false; // Track if game has started
         
-        // Multiplayer mode properties (only mode available)
-        this.playerMode = 'multiplayer'; // Only multiplayer mode
+        // Player mode properties
+        this.playerMode = 'single'; // 'single', 'two', or 'multiplayer'
         this.currentPlayer = 1; // 1 or 2
         this.playerScores = { 1: 0, 2: 0 };
         this.playerFoundWords = { 1: new Set(), 2: new Set() };
@@ -55,6 +55,7 @@ class FindWordsGame {
         this.wsConnected = false;
         this.wsServerUrl = 'ws://localhost:3000';
         this.pendingActions = []; // Queue for actions pending WebSocket connection
+        this.pendingWordFound = null; // Store word found data while waiting for server confirmation
         
         // Predefined word lists for random mode
         this.wordLists = {
@@ -71,11 +72,30 @@ class FindWordsGame {
      */
     init() {
         this.bindEvents();
-        // Auto-set multiplayer mode
-        this.setPlayerMode('multiplayer');
-        // Auto-connect to WebSocket server on page load
-        this.connectWebSocket();
-        // Don't auto-start game, wait for room creation
+        // Default to single player mode
+        this.setPlayerMode('single');
+        // Don't auto-connect to WebSocket - only connect when multiplayer is selected
+        // WebSocket will be connected when user selects multiplayer mode
+        
+        // Wallet address for Walrus integration
+        this.walletAddress = null;
+    }
+    
+    /**
+     * Wallet connection callbacks
+     */
+    onWalletConnected(address) {
+        this.walletAddress = address;
+        console.log('Wallet connected to game:', address);
+    }
+    
+    onWalletDisconnected() {
+        this.walletAddress = null;
+        console.log('Wallet disconnected from game');
+    }
+    
+    getWalletAddress() {
+        return this.walletAddress;
     }
 
     /**
@@ -83,6 +103,8 @@ class FindWordsGame {
      */
     bindEvents() {
         // Player mode selection (only multiplayer available)
+        document.getElementById('singlePlayerMode').addEventListener('click', () => this.setPlayerMode('single'));
+        document.getElementById('twoPlayerMode').addEventListener('click', () => this.setPlayerMode('two'));
         document.getElementById('multiplayerMode').addEventListener('click', () => this.setPlayerMode('multiplayer'));
         
         // Multiplayer controls
@@ -142,24 +164,62 @@ class FindWordsGame {
     }
 
     /**
-     * Set player mode (only multiplayer available)
+     * Set player mode (single, two, or multiplayer)
      */
     setPlayerMode(mode) {
-        this.playerMode = 'multiplayer'; // Force multiplayer mode
+        this.playerMode = mode;
         
-        // Update UI
-        document.getElementById('multiplayerMode').classList.add('active');
-        document.getElementById('multiplayerPanel').classList.remove('hidden');
+        // Update button states
+        document.getElementById('singlePlayerMode').classList.remove('active');
+        document.getElementById('twoPlayerMode').classList.remove('active');
+        document.getElementById('multiplayerMode').classList.remove('active');
         
-        // Show player stats
+        // Show/hide multiplayer panel
+        const multiplayerPanel = document.getElementById('multiplayerPanel');
         const playerStats = document.getElementById('playerStats');
-        playerStats.classList.remove('hidden');
+        const playerScoresDisplay = document.getElementById('playerScoresDisplay');
         
-        // Show player scores display above game box
-        document.getElementById('playerScoresDisplay').classList.remove('hidden');
+        if (mode === 'multiplayer') {
+            document.getElementById('multiplayerMode').classList.add('active');
+            multiplayerPanel.classList.remove('hidden');
+            playerStats.classList.remove('hidden');
+            playerScoresDisplay.classList.remove('hidden');
+            
+            // Connect to WebSocket if not already connected
+            if (!this.wsConnected) {
+                this.connectWebSocket();
+            }
+        } else if (mode === 'two') {
+            document.getElementById('twoPlayerMode').classList.add('active');
+            multiplayerPanel.classList.add('hidden');
+            playerStats.classList.remove('hidden');
+            playerScoresDisplay.classList.add('hidden');
+            
+            // Disconnect WebSocket for local 2-player mode
+            this.disconnectWebSocket();
+        } else if (mode === 'single') {
+            document.getElementById('singlePlayerMode').classList.add('active');
+            multiplayerPanel.classList.add('hidden');
+            playerStats.classList.add('hidden');
+            playerScoresDisplay.classList.add('hidden');
+            
+            // Disconnect WebSocket for single player mode
+            this.disconnectWebSocket();
+        }
         
-        // Hide buttons that shouldn't be visible in multiplayer
-        // (Already handled by multiplayer-hidden class in HTML)
+        // Show/hide controls based on mode
+        const modeSelectors = document.querySelectorAll('.multiplayer-hidden');
+        if (mode === 'multiplayer') {
+            modeSelectors.forEach(el => el.classList.add('hidden'));
+        } else {
+            modeSelectors.forEach(el => el.classList.remove('hidden'));
+        }
+        
+        // Show words section for single and two-player modes
+        const wordsSection = document.getElementById('wordsToFindSection');
+        if (mode !== 'multiplayer' && wordsSection) {
+            wordsSection.classList.remove('hidden');
+        }
     }
 
     /**
@@ -700,56 +760,93 @@ class FindWordsGame {
             this.markWordAsFound(foundWordIndex);
             this.foundWords.add(foundWordIndex);
             
-            // Handle 2-player mode scoring (local or multiplayer)
-            if (this.playerMode === 'two' || this.playerMode === 'multiplayer') {
-                const currentPlayerForScoring = this.playerMode === 'multiplayer' ? this.playerNumber : this.currentPlayer;
+            // Handle scoring based on mode
+            if (this.playerMode === 'two') {
+                // Local 2-player mode - update scores immediately
+                const currentPlayerForScoring = this.currentPlayer;
                 this.playerFoundWords[currentPlayerForScoring].add(foundWordIndex);
                 this.playerScores[currentPlayerForScoring]++;
                 this.updatePlayerStats();
                 
-                // Switch to next player (only in local 2-player mode)
-                if (this.playerMode === 'two') {
-                    this.currentPlayer = this.currentPlayer === 1 ? 2 : 1;
-                    this.updatePlayerTurnIndicator();
-                }
-            }
-            
-            // If the found word was the current hint word, reset hint tracking
-            if (this.currentHintWordIndex === foundWordIndex) {
-                this.currentHintWordIndex = -1;
-                this.clearHints();
-            }
-            
-            // Send to server if multiplayer
-            if (this.playerMode === 'multiplayer' && this.wsConnected) {
-                this.sendWebSocketMessage({
-                    type: 'WORD_FOUND',
+                // Switch to next player
+                this.currentPlayer = this.currentPlayer === 1 ? 2 : 1;
+                this.updatePlayerTurnIndicator();
+            } else if (this.playerMode === 'multiplayer') {
+                // Multiplayer mode - DON'T update scores or mark cells locally yet
+                // Wait for server confirmation to ensure synchronization
+                // Store the found word info temporarily
+                const foundWordData = {
                     wordIndex: foundWordIndex,
-                    cells: this.selectedCells
+                    cells: [...this.selectedCells]
+                };
+                
+                // Send to server - server will update scores and broadcast to both players
+                if (this.wsConnected && this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    const message = {
+                        type: 'WORD_FOUND',
+                        wordIndex: foundWordIndex,
+                        cells: this.selectedCells
+                    };
+                    console.log('📤 Sending WORD_FOUND to server:', message);
+                    this.sendWebSocketMessage(message);
+                    console.log(`✅ WORD_FOUND sent - waiting for server confirmation`);
+                    
+                    // Store pending word data - will be processed when server confirms
+                    this.pendingWordFound = foundWordData;
+                } else {
+                    console.error('❌ Cannot send WORD_FOUND - WebSocket not connected!', {
+                        wsConnected: this.wsConnected,
+                        wsExists: !!this.ws,
+                        readyState: this.ws ? this.ws.readyState : 'N/A'
+                    });
+                    // Fallback: update locally if WebSocket is not available
+                    this.playerFoundWords[this.playerNumber].add(foundWordIndex);
+                    this.playerScores[this.playerNumber] = (this.playerScores[this.playerNumber] || 0) + 1;
+                    this.updatePlayerStats();
+                    this.markWordAsFound(foundWordIndex);
+                    this.updateStats();
+                    // Mark cells
+                    this.selectedCells.forEach(({ row, col }) => {
+                        const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                        if (cell) {
+                            setTimeout(() => {
+                                cell.classList.add('found');
+                                cell.classList.add(`player-${this.playerNumber}-found`);
+                            }, 100);
+                        }
+                        this.grid[row][col].found = true;
+                    });
+                }
+            } else {
+                // Single player or two-player local mode - update immediately
+                // If the found word was the current hint word, reset hint tracking
+                if (this.currentHintWordIndex === foundWordIndex) {
+                    this.currentHintWordIndex = -1;
+                    this.clearHints();
+                }
+                
+                this.updateStats();
+                
+                // Win condition check
+                if (this.playerMode !== 'multiplayer') {
+                    this.checkWinCondition();
+                }
+                
+                // Animate found cells with player color in 2-player mode
+                this.selectedCells.forEach(({ row, col }) => {
+                    const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                    if (cell) {
+                        setTimeout(() => {
+                            cell.classList.add('found');
+                            if (this.playerMode === 'two') {
+                                const playerNum = this.currentPlayer === 1 ? 2 : 1;
+                                cell.classList.add(`player-${playerNum}-found`);
+                            }
+                        }, 100);
+                    }
+                    this.grid[row][col].found = true;
                 });
             }
-            
-            this.updateStats();
-            // Win condition is handled by server in multiplayer mode
-            // Only check locally for single-player mode
-            if (this.playerMode !== 'multiplayer') {
-                this.checkWinCondition();
-            }
-            
-            // Animate found cells with player color in 2-player mode
-            this.selectedCells.forEach(({ row, col }) => {
-                const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
-                if (cell) {
-                    setTimeout(() => {
-                        cell.classList.add('found');
-                        if (this.playerMode === 'two' || this.playerMode === 'multiplayer') {
-                            const playerNum = this.playerMode === 'multiplayer' ? this.playerNumber : (this.currentPlayer === 1 ? 2 : 1);
-                            cell.classList.add(`player-${playerNum}-found`);
-                        }
-                    }, 100);
-                }
-                this.grid[row][col].found = true;
-            });
         }
     }
 
@@ -1049,12 +1146,29 @@ class FindWordsGame {
             winner = 2;
         }
         
-        // Notify server if host
+        // Notify server if host (include wallet addresses for Walrus integration)
+        // NOTE: Wallet is optional - game can be played without wallet connection
         if (this.playerMode === 'multiplayer' && this.isHost && this.wsConnected) {
+            // Collect wallet addresses if available (optional)
+            const walletAddresses = {};
+            if (this.walletAddress) {
+                walletAddresses[this.playerNumber] = this.walletAddress;
+            }
+            
+            // If wallet manager is available, try to get wallet address
+            if (window.walletManager && window.walletManager.isConnected()) {
+                const walletAddr = window.walletManager.getAddress();
+                if (walletAddr) {
+                    walletAddresses[this.playerNumber] = walletAddr;
+                }
+            }
+            
+            // Send game over message (wallet addresses are optional)
             this.sendWebSocketMessage({
                 type: 'GAME_OVER',
                 playerScores: this.playerScores,
-                winner: winner
+                winner: winner,
+                walletAddresses: walletAddresses // Can be empty - that's okay!
             });
         }
         
@@ -1062,8 +1176,8 @@ class FindWordsGame {
         this.showGameOverModal(winner);
     }
 
-    showGameOverModal(winner) {
-        // Update final scores
+    showGameOverModal(winner, walrusData = null) {
+        // Update final scores (use server-provided scores)
         const player1Score = this.playerScores[1] || 0;
         const player2Score = this.playerScores[2] || 0;
         const totalScore = player1Score + player2Score; // Overall total score
@@ -1079,22 +1193,33 @@ class FindWordsGame {
         const seconds = totalTime % 60;
         const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
         
-        // Determine and display winner
+        // Determine and display winner based on server calculation
+        // winner: 0 = tie, 1 = player 1 wins (highest score), 2 = player 2 wins (highest score)
         let winnerText = '';
         let winnerMessage = '';
-        const currentPlayerNum = this.playerNumber || 1; // Default to player 1 if not set
+        const currentPlayerNum = this.playerNumber || 1; // Current player's number
         
         if (winner === 0) {
+            // Tie - both players have same score
             winnerText = "It's a Tie! 🤝";
             winnerMessage = `Both players scored ${player1Score} points!\n\nTotal Score: ${totalScore} points\nTotal Time: ${timeString}`;
         } else if (winner === currentPlayerNum) {
+            // Current player wins (has highest score)
             winnerText = 'You Win! 🎉';
-            winnerMessage = `Congratulations! You scored ${this.playerScores[currentPlayerNum] || 0} points!\n\nTotal Score: ${totalScore} points\nTotal Time: ${timeString}`;
+            const yourScore = this.playerScores[currentPlayerNum] || 0;
+            const opponentScore = winner === 1 ? player2Score : player1Score;
+            winnerMessage = `Congratulations! You won with ${yourScore} points!\n\nOpponent scored: ${opponentScore} points\nTotal Score: ${totalScore} points\nTotal Time: ${timeString}`;
         } else {
+            // Current player lost (opponent has highest score)
             winnerText = 'You Lost! 😔';
             const winnerScore = winner === 1 ? player1Score : player2Score;
             const yourScore = this.playerScores[currentPlayerNum] || 0;
-            winnerMessage = `Player ${winner} won with ${winnerScore} points.\nYou scored ${yourScore} points.\n\nTotal Score: ${totalScore} points\nTotal Time: ${timeString}`;
+            winnerMessage = `Player ${winner} won with ${winnerScore} points.\n\nYou scored: ${yourScore} points\nTotal Score: ${totalScore} points\nTotal Time: ${timeString}`;
+        }
+        
+        // Add Walrus information if available
+        if (walrusData && walrusData.uploaded && walrusData.aggregatorUrl) {
+            winnerMessage += `\n\n📦 Stored on Walrus (Blockchain):\n🔗 ${walrusData.aggregatorUrl}`;
         }
         
         const winTitleEl = document.getElementById('winTitle');
@@ -1173,6 +1298,14 @@ class FindWordsGame {
      * Start the game
      */
     startGame() {
+        // NOTE: Wallet connection is optional - players can play without wallet
+        // Check wallet status but don't block gameplay
+        if (window.walletManager && window.walletManager.isConnected()) {
+            console.log('✅ Wallet connected - game results will be stored on blockchain');
+        } else {
+            console.log('ℹ️ No wallet connected - playing in friendly mode (results not stored on blockchain)');
+        }
+        
         // In multiplayer mode, only host can start
         if (this.playerMode === 'multiplayer') {
             if (!this.isHost) {
@@ -1349,24 +1482,67 @@ class FindWordsGame {
     updatePlayerStats() {
         if (this.playerMode === 'two' || this.playerMode === 'multiplayer') {
             // Ensure scores are numbers, default to 0 if undefined
-            const player1Score = this.playerScores[1] || 0;
-            const player2Score = this.playerScores[2] || 0;
+            const player1Score = Number(this.playerScores[1]) || 0;
+            const player2Score = Number(this.playerScores[2]) || 0;
             
-            // Update sidebar scores
+            // Update sidebar scores (for 2-player mode)
             const player1ScoreEl = document.getElementById('player1Score');
             const player2ScoreEl = document.getElementById('player2Score');
-            if (player1ScoreEl) player1ScoreEl.textContent = player1Score;
-            if (player2ScoreEl) player2ScoreEl.textContent = player2Score;
+            if (player1ScoreEl) {
+                player1ScoreEl.textContent = player1Score;
+            }
+            if (player2ScoreEl) {
+                player2ScoreEl.textContent = player2Score;
+            }
             
-            // Update score display above game box (multiplayer)
+            // Update score display above game box (multiplayer) - THIS IS THE MAIN DISPLAY
             if (this.playerMode === 'multiplayer') {
                 const player1PointsEl = document.getElementById('player1PointsDisplay');
                 const player2PointsEl = document.getElementById('player2PointsDisplay');
-                if (player1PointsEl) player1PointsEl.textContent = player1Score;
-                if (player2PointsEl) player2PointsEl.textContent = player2Score;
+                
+                if (player1PointsEl) {
+                    const oldValue = player1PointsEl.textContent;
+                    player1PointsEl.textContent = player1Score;
+                    if (oldValue !== String(player1Score)) {
+                        console.log(`📊 Player 1 score updated: ${oldValue} → ${player1Score}`);
+                    }
+                } else {
+                    console.error('❌ player1PointsDisplay element not found!');
+                }
+                
+                if (player2PointsEl) {
+                    const oldValue = player2PointsEl.textContent;
+                    player2PointsEl.textContent = player2Score;
+                    if (oldValue !== String(player2Score)) {
+                        console.log(`📊 Player 2 score updated: ${oldValue} → ${player2Score}`);
+                    }
+                } else {
+                    console.error('❌ player2PointsDisplay element not found!');
+                }
             }
             
             this.updatePlayerTurnIndicator();
+        }
+    }
+    
+    /**
+     * Animate score update when a player finds a word
+     */
+    animateScoreUpdate(playerNumber) {
+        if (this.playerMode === 'multiplayer' && playerNumber) {
+            const pointsEl = playerNumber === 1 
+                ? document.getElementById('player1PointsDisplay')
+                : document.getElementById('player2PointsDisplay');
+            
+            if (pointsEl) {
+                // Add animation class
+                pointsEl.classList.add('score-updated');
+                
+                // Remove animation class after animation completes
+                setTimeout(() => {
+                    pointsEl.classList.remove('score-updated');
+                }, 500);
+            }
         }
     }
     
@@ -1668,7 +1844,17 @@ class FindWordsGame {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             try {
                 const jsonMessage = JSON.stringify(message);
-                console.log('Sending WebSocket message type:', message.type);
+                console.log('📤 Sending WebSocket message type:', message.type);
+                
+                if (message.type === 'WORD_FOUND') {
+                    console.log('📤 WORD_FOUND message details:', {
+                        wordIndex: message.wordIndex,
+                        cells: message.cells,
+                        playerNumber: this.playerNumber,
+                        roomCode: this.roomCode
+                    });
+                }
+                
                 if (message.type === 'START_GAME') {
                     console.log('START_GAME message structure:', {
                         hasGameState: !!message.gameState,
@@ -1678,10 +1864,11 @@ class FindWordsGame {
                         isWordsArray: message.gameState && message.gameState.words ? Array.isArray(message.gameState.words) : 'N/A'
                     });
                 }
+                
                 this.ws.send(jsonMessage);
-                console.log('Message sent successfully');
+                console.log('✅ Message sent successfully:', message.type);
             } catch (error) {
-                console.error('Error stringifying message:', error);
+                console.error('❌ Error sending message:', error);
                 console.error('Message that failed:', message);
                 alert('Error sending message to server: ' + error.message);
             }
@@ -1773,6 +1960,16 @@ class FindWordsGame {
                 alert(`Player ${data.playerNumber} disconnected`);
                 break;
 
+            case 'PLAYER_LEFT':
+                this.updatePlayersCount(data.playersRemaining || 1);
+                alert(`A player left the room. Players remaining: ${data.playersRemaining || 1}`);
+                break;
+
+            case 'ERROR':
+                console.error('Server error:', data.message);
+                alert(`Error: ${data.message}`);
+                break;
+
             case 'GAME_CONFIG_UPDATED':
                 // Game config updated by host
                 break;
@@ -1808,8 +2005,10 @@ class FindWordsGame {
                     this.currentLevel = data.gameConfig.currentLevel || 1;
                     // Initialize player scores - ensure both players have scores
                     this.playerScores = data.gameConfig.playerScores || { 1: 0, 2: 0 };
-                    if (!this.playerScores[1]) this.playerScores[1] = 0;
-                    if (!this.playerScores[2]) this.playerScores[2] = 0;
+                    // Ensure scores are numbers
+                    this.playerScores[1] = Number(this.playerScores[1]) || 0;
+                    this.playerScores[2] = Number(this.playerScores[2]) || 0;
+                    console.log('🎮 Initialized player scores:', this.playerScores);
                     this.foundWords = new Set();
                     this.playerFoundWords = { 1: new Set(), 2: new Set() };
                     this.currentPlayer = 1;
@@ -1949,40 +2148,133 @@ class FindWordsGame {
                 break;
 
             case 'GAME_OVER':
-                // Game over - show winner
+                // Game over - show winner based on server calculation
                 console.log('GAME_OVER received:', data);
                 // Ensure game is stopped
                 this.gameStarted = false;
                 clearInterval(this.levelTimerInterval);
                 
-                // Update scores
+                // Update scores from server (authoritative source)
                 if (data.playerScores) {
                     this.playerScores = {
-                        1: data.playerScores[1] || 0,
-                        2: data.playerScores[2] || 0
+                        1: data.playerScores[1] || data.playerScores.player1 || 0,
+                        2: data.playerScores[2] || data.playerScores.player2 || 0
                     };
+                    console.log('📊 Final scores from server:', this.playerScores);
                     this.updatePlayerStats();
                 }
                 
-                // Show modal with winner (default to 0/tie if not provided)
+                // Display Walrus upload result
+                if (data.walrus) {
+                    console.log('📦 Walrus Upload Result:', data.walrus);
+                    if (data.walrus.uploaded && data.walrus.blobId) {
+                        console.log('✅ Game result uploaded to Walrus!');
+                        console.log('🔗 Blob ID:', data.walrus.blobId);
+                        console.log('🌐 View at:', data.walrus.aggregatorUrl);
+                        
+                        // Store Walrus info for display
+                        this.walrusBlobId = data.walrus.blobId;
+                        this.walrusUrl = data.walrus.aggregatorUrl;
+                    } else {
+                        console.warn('⚠️ Walrus upload failed or incomplete');
+                    }
+                }
+                
+                // Use server-determined winner (0 = tie, 1 = player 1, 2 = player 2)
+                // Server calculates based on highest score
                 const winner = data.winner !== undefined ? data.winner : 0;
-                this.showGameOverModal(winner);
+                console.log('🏆 Winner from server:', winner === 0 ? 'Tie' : `Player ${winner}`);
+                this.showGameOverModal(winner, data.walrus);
                 break;
 
             case 'WORD_FOUND':
-                // Word found by any player (both players play simultaneously)
-                // Update scores regardless of who found it
+                // Word found by any player - update scores immediately for both players
+                console.log('📢 WORD_FOUND received:', {
+                    foundBy: data.playerNumber,
+                    myNumber: this.playerNumber,
+                    scores: data.playerScores,
+                    wordIndex: data.wordIndex,
+                    isMyWord: data.playerNumber === this.playerNumber
+                });
+                
+                // Update scores from server (authoritative source) - CRITICAL for synchronization
                 if (data.playerScores) {
-                    this.playerScores = data.playerScores;
+                    // Store old scores for comparison
+                    const oldScores = { ...this.playerScores };
+                    
+                    // Ensure scores are properly formatted as numbers
+                    this.playerScores = {
+                        1: Number(data.playerScores[1]) || Number(data.playerScores.player1) || 0,
+                        2: Number(data.playerScores[2]) || Number(data.playerScores.player2) || 0
+                    };
+                    
+                    console.log('✅ Scores updated from server:', {
+                        old: oldScores,
+                        new: this.playerScores,
+                        changed: oldScores[1] !== this.playerScores[1] || oldScores[2] !== this.playerScores[2]
+                    });
+                } else {
+                    console.warn('⚠️ WORD_FOUND received but no playerScores in data:', data);
                 }
                 
-                if (data.playerNumber !== this.playerNumber) {
-                    // Another player found a word - update scores and stats
-                    // Note: We don't mark cells in our grid since each player has their own puzzle
-                    this.updatePlayerStats();
-                } else {
-                    // We found a word - scores already updated locally, just sync with server
-                    this.updatePlayerStats();
+                // Mark word as found in the word list (for both players to see)
+                if (typeof data.wordIndex !== 'undefined') {
+                    // Only mark if not already found (prevent duplicate marking)
+                    if (!this.foundWords.has(data.wordIndex)) {
+                        this.foundWords.add(data.wordIndex);
+                        // Update word list display
+                        this.markWordAsFound(data.wordIndex);
+                    }
+                    
+                    // Track which player found which word
+                    if (data.playerNumber) {
+                        this.playerFoundWords[data.playerNumber].add(data.wordIndex);
+                    }
+                }
+                
+                // Mark cells on grid if cell data is provided
+                // This allows both players to see where words were found
+                if (data.cells && Array.isArray(data.cells) && data.cells.length > 0) {
+                    const isMyWord = data.playerNumber === this.playerNumber;
+                    
+                    data.cells.forEach(({ row, col }) => {
+                        const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                        if (cell) {
+                            // Mark cell as found
+                            cell.classList.add('found');
+                            // Add player-specific styling
+                            if (data.playerNumber) {
+                                cell.classList.add(`player-${data.playerNumber}-found`);
+                            }
+                            // Update grid data
+                            if (this.grid[row] && this.grid[row][col]) {
+                                this.grid[row][col].found = true;
+                            }
+                        }
+                    });
+                    
+                    console.log(`✅ Marked ${data.cells.length} cells as found (found by player ${data.playerNumber})`);
+                }
+                
+                // Clear pending word if this is our own word (server confirmed it)
+                if (data.playerNumber === this.playerNumber && this.pendingWordFound) {
+                    console.log('✅ Server confirmed our word find - clearing pending');
+                    this.pendingWordFound = null;
+                }
+                
+                // If the found word was the current hint word, reset hint tracking
+                if (this.currentHintWordIndex === data.wordIndex) {
+                    this.currentHintWordIndex = -1;
+                    this.clearHints();
+                }
+                
+                // CRITICAL: Update UI immediately - this ensures both players see updated scores
+                this.updateStats();
+                this.updatePlayerStats();
+                
+                // Force UI update with animation to show score change
+                if (data.playerNumber) {
+                    this.animateScoreUpdate(data.playerNumber);
                 }
                 
                 // Check if current player has completed their level
@@ -2379,5 +2671,5 @@ class FindWordsGame {
 
 // Initialize game when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    new FindWordsGame();
+    window.game = new FindWordsGame();
 });

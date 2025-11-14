@@ -4,16 +4,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Find the Words Game</title>
+    <title>LexiBattle</title>
     <link rel="stylesheet" href="styles.css">
+    <!-- Note: Sui SDK not needed for wallet connection - wallets expose their own APIs -->
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>Find the Words</h1>
+            <div class="header-top">
+                <h1>LexiBattle</h1>
+                <!-- Wallet Connection Button (Top Right) -->
+                <div class="wallet-connection">
+                    <button id="walletConnectBtn" class="wallet-btn">
+                        <span id="walletStatus">🔗 Connect Wallet</span>
+                    </button>
+                    <div id="walletInfo" class="wallet-info hidden">
+                        <span id="walletAddress" class="wallet-address"></span>
+                        <span id="walletNetwork" class="wallet-network">Sui Testnet</span>
+                        <button id="walletDisconnectBtn" class="wallet-disconnect-btn">Disconnect</button>
+                    </div>
+                </div>
+            </div>
             <div class="game-controls">
                 <div class="player-mode-selector">
-                    <button id="multiplayerMode" class="player-mode-btn active">Multiplayer (Online)</button>
+                    <button id="singlePlayerMode" class="player-mode-btn active">Single Player</button>
+                    <button id="twoPlayerMode" class="player-mode-btn">2 Players</button>
+                    <button id="multiplayerMode" class="player-mode-btn">Multiplayer (Online)</button>
                 </div>
                 <!-- Multiplayer Connection Panel -->
                 <div id="multiplayerPanel" class="multiplayer-panel hidden">
@@ -196,6 +212,7 @@
         </div>
     </div>
 
+    <script src="wallet.js"></script>
     <script src="script.js"></script>
 </body>
 </html>
